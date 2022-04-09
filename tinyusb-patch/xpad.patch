@@ -1,0 +1,82 @@
+diff --git a/hw/bsp/rp2040/family.cmake b/hw/bsp/rp2040/family.cmake
+index 1aa180ef..894620fc 100644
+--- a/hw/bsp/rp2040/family.cmake
++++ b/hw/bsp/rp2040/family.cmake
+@@ -89,6 +89,7 @@ if (NOT TARGET _rp2040_family_inclusion_marker)
+ 			${TOP}/src/class/hid/hid_host.c
+ 			${TOP}/src/class/msc/msc_host.c
+ 			${TOP}/src/class/vendor/vendor_host.c
++			${TOP}/src/class/xpad/xpad_host.c
+ 			)
+ 
+ 	# Sometimes have to do host specific actions in mostly
+diff --git a/src/host/usbh.c b/src/host/usbh.c
+index 2ef936ad..ffac5c1e 100644
+--- a/src/host/usbh.c
++++ b/src/host/usbh.c
+@@ -183,6 +183,17 @@ static usbh_class_driver_t const usbh_class_drivers[] =
+       .close      = cush_close
+     }
+   #endif
++
++  #if CFG_TUH_XPAD
++    {
++      DRIVER_NAME("XPAD")
++      .init       = xpadh_init,
++      .open       = xpadh_open,
++      .set_config = xpadh_set_config,
++      .xfer_cb    = xpadh_xfer_cb,
++      .close      = xpadh_close
++    }
++  #endif
+ };
+ 
+ enum { USBH_CLASS_DRIVER_COUNT = TU_ARRAY_SIZE(usbh_class_drivers) };
+diff --git a/src/portable/raspberrypi/rp2040/hcd_rp2040.c b/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+index 5e5bb490..3036af16 100644
+--- a/src/portable/raspberrypi/rp2040/hcd_rp2040.c
++++ b/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+@@ -331,7 +331,12 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t
+         uint32_t reg = dev_addr | (num << USB_ADDR_ENDP1_ENDPOINT_LSB);
+         // Assert the interrupt endpoint is IN_TO_HOST
+         // TODO Interrupt can also be OUT
+-        assert(dir == TUSB_DIR_IN);
++        //assert(dir == TUSB_DIR_IN);
++
++        if (dir == TUSB_DIR_OUT)
++        {
++            reg |= USB_ADDR_ENDP1_INTEP_DIR_BITS;
++        }
+ 
+         if (need_pre(dev_addr))
+         {
+diff --git a/src/tusb.h b/src/tusb.h
+index 0d29e106..50263d38 100644
+--- a/src/tusb.h
++++ b/src/tusb.h
+@@ -58,6 +58,10 @@
+     #include "class/vendor/vendor_host.h"
+   #endif
+ 
++  #if CFG_TUH_XPAD
++    #include "class/xpad/xpad_host.h"
++  #endif
++
+ #endif
+ 
+ //------------- DEVICE -------------//
+diff --git a/src/tusb_option.h b/src/tusb_option.h
+index e49fc011..eccc68ba 100644
+--- a/src/tusb_option.h
++++ b/src/tusb_option.h
+@@ -321,6 +321,10 @@
+ #define CFG_TUH_VENDOR 0
+ #endif
+ 
++#ifndef CFG_TUH_XPAD
++#define CFG_TUH_XPAD 0
++#endif
++
+ //--------------------------------------------------------------------+
+ // Port Specific
+ // TUP stand for TinyUSB Port (can be renamed)
