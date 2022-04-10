@@ -27,6 +27,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pico/stdlib.h"
+#include "pico/multicore.h"
+#include "hardware/clocks.h"
+#include "n64.pio.h"
+
 #include "bsp/board.h"
 #include "tusb.h"
 
@@ -122,13 +127,6 @@ void xpad_task(void)
 
 }
 
-//--------------------------------------------------------------------+
-// TinyUSB Callbacks
-//--------------------------------------------------------------------+
-
-//--------------------------------------------------------------------+
-// Blinking Task
-//--------------------------------------------------------------------+
 void led_blinking_task(void)
 {
   const uint32_t interval_ms = 1000;
@@ -144,32 +142,19 @@ void led_blinking_task(void)
   led_state = 1 - led_state; // toggle
 }
 
-//--------------------------------------------------------------------+
-// Main process
-//--------------------------------------------------------------------+
-#include "pico/stdlib.h"
-#include "pico/multicore.h"
-#include "hardware/clocks.h"
-#include "n64.pio.h"
-
-static uint8_t reverse(uint8_t i)
+static uint8_t reverse(uint8_t b)
 {
-    uint8_t o = 0;
-
-    for (int n = 0; n < 8; n++) {
-        o <<= 1;
-        o |= (i & 0x01);
-        i >>= 1;
-    }
-
-    return o;
+   b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+   b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+   b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+   return b;
 }
 
 int main(void)
 {
   board_init();
 
-  printf("TinyUSB Host CDC MSC HID Example\r\n");
+  printf("USB to N64 adapter\n");
 
   multicore_reset_core1();
   multicore_launch_core1(usb_host_process);
@@ -179,7 +164,7 @@ int main(void)
   gpio_init(2);
   gpio_pull_up(2);
   gpio_set_dir(2, GPIO_IN);
-  stdio_init_all();
+//  stdio_init_all();
 
   // Choose which PIO instance to use (there are two instances)
   PIO pio = pio0;
