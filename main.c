@@ -30,10 +30,14 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/clocks.h"
+#include "hardware/watchdog.h"
+
 #include "n64.pio.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
+
+#define N64_DIO_PIN	2
 
 static uint16_t m_vid = 0;
 static uint16_t m_pid = 0;
@@ -52,29 +56,28 @@ extern void hid_app_task(void);
 /*------------- MAIN -------------*/
 void usb_host_process(void)
 {
-  tusb_init();
+    tusb_init();
 
-  while (1)
-  {
-    // tinyusb host task
-    tuh_task();
-    led_blinking_task();
+    while (1) {
+	tuh_task();
+
+	led_blinking_task();
 
 #if CFG_TUH_XPAD
-    xpad_task();
+	xpad_task();
 #endif
 
 #if CFG_TUH_HID
-    hid_app_task();
+	hid_app_task();
 #endif
-  }
+    }
 }
 
 void tuh_mount_cb(uint8_t dev_addr)
 {
-  tuh_vid_pid_get(dev_addr, &m_vid, &m_pid);
+    tuh_vid_pid_get(dev_addr, &m_vid, &m_pid);
 
-  printf("A device %04X:%04X with address %d is mounted\r\n", m_vid, m_pid, dev_addr);
+    printf("A device %04X:%04X with address %d is mounted\r\n", m_vid, m_pid, dev_addr);
 }
 
 static int8_t analog_value(uint8_t *val8)
@@ -96,29 +99,31 @@ void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report)
     uint8_t b1 = 0;
 
     if (report[0] == 0x20) {
-	if (report[5] & 0x01) b |= 0x08; // d-up    d-up
-	if (report[5] & 0x02) b |= 0x04; // d-down  d-down
-	if (report[5] & 0x04) b |= 0x02; // d-left  d-left
-	if (report[5] & 0x08) b |= 0x01; // d-right d-right
-	if (report[4] & 0x10) b |= 0x80; // a       a
-	if (report[4] & 0x20) b |= 0x40; // b       b
-	if (report[5] & 0x80) b |= 0x20; // rsb     z
-	if (report[4] & 0x04) b |= 0x10; // start   start
+	if (report[5] & 0x01) b |= 0x08; // D-U    D-UP
+	if (report[5] & 0x02) b |= 0x04; // D-D    D-D
+	if (report[5] & 0x04) b |= 0x02; // D-L    D-L
+	if (report[5] & 0x08) b |= 0x01; // D-R    D-R
+
+	if (analog_value(&report[16]) > 40)  b1|= 0x08; // RS-U  C-U
+	if (analog_value(&report[16]) < -40) b1|= 0x04; // RS-D  C-D
+	if (analog_value(&report[14]) < -40) b1|= 0x02; // RS-L  C-L
+	if (analog_value(&report[14]) > 40)  b1|= 0x01; // RS-R  C-R
+
+	if (report[4] & 0x10) b |= 0x80; // A      A
+	if (report[4] & 0x20) b |= 0x40; // B      B
+	if (*((int16_t *)&report[8]) > 0x180) b |= 0x20; // LT    Z
+	if (*((int16_t *)&report[6]) > 0x180) b |= 0x20; // LT    Z
+	if (report[4] & 0x04) b |= 0x10; // START  START
 
 	if (report[5] & 0x10) b1|= 0x20; // LB      L
 	if (report[5] & 0x20) b1|= 0x10; // RB      R
-	if (analog_value(&report[16]) > 40)  b1|= 0x08; // RS-U  C-U
-	if (analog_value(&report[16]) < -40) b1|= 0x04; // RS-D  C-D
-	if (analog_value(&report[14]) > 40)  b1|= 0x01; // RS-R  C-R
-	if (analog_value(&report[14]) < -40) b1|= 0x02; // RS-L  C-L
 
 	buttons[0] = b;
 	buttons[1] = b1;
 	sticks[0] = analog_value(&report[10]);
 	sticks[1] = analog_value(&report[12]);
 
-	printf("RS %d %d\r\n", analog_value(&report[14]), analog_value(&report[16]));
-
+	//printf("RS %d %d\r\n", analog_value(&report[14]), analog_value(&report[16]));
     }
 }
 
@@ -129,67 +134,62 @@ void xpad_task(void)
 
 void led_blinking_task(void)
 {
-  const uint32_t interval_ms = 1000;
-  static uint32_t start_ms = 0;
+    const uint32_t interval_ms = 1000;
+    static uint32_t start_ms = 0;
 
-  static bool led_state = false;
+    static bool led_state = false;
 
-  // Blink every interval ms
-  if ( board_millis() - start_ms < interval_ms) return; // not enough time
-  start_ms += interval_ms;
+    // Blink every interval ms
+    if ( board_millis() - start_ms < interval_ms) return; // not enough time
+    start_ms += interval_ms;
 
-  board_led_write(led_state);
-  led_state = 1 - led_state; // toggle
+    board_led_write(led_state);
+    led_state = 1 - led_state; // toggle
 }
 
 static uint8_t reverse(uint8_t b)
 {
-   b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
-   b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
-   b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
-   return b;
+    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+    return b;
 }
 
 int main(void)
 {
-  board_init();
+    board_init();
 
-  printf("USB to N64 adapter\n");
+    printf("USB to N64 adapter\n");
 
-  multicore_reset_core1();
-  multicore_launch_core1(usb_host_process);
+    if (watchdog_caused_reboot()) {
+        TU_LOG2("Rebooted by Watchdog!\n");
+    } else {
+        TU_LOG2("Clean boot\n");
+    }
 
-  printf("clock sys = %d\n", clock_get_hz(clk_sys));
+    TU_LOG2("clock sys = %d\n", clock_get_hz(clk_sys));
 
-  gpio_init(2);
-  gpio_pull_up(2);
-  gpio_set_dir(2, GPIO_IN);
+    gpio_init(N64_DIO_PIN);
+    gpio_pull_up(N64_DIO_PIN);
+    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 //  stdio_init_all();
 
-  // Choose which PIO instance to use (there are two instances)
-  PIO pio = pio0;
+    PIO pio = pio0;
 
-  // Our assembled program needs to be loaded into this PIO's instruction
-  // memory. This SDK function will find a location (offset) in the
-  // instruction memory where there is enough space for our program. We need
-  // to remember this location!
-  uint offset = pio_add_program(pio, &n64_program);
+    uint offset = pio_add_program(pio, &n64_program);
 
-  // Find a free state machine on our chosen PIO (erroring if there are
-  // none). Configure it to run our program, and start it, using the
-  // helper function we included in our .pio file.
-  uint sm = pio_claim_unused_sm(pio, true);
-  pio_sm_config c = n64_program_init(pio, sm, offset, 2, 16.625);
+    uint sm = pio_claim_unused_sm(pio, true);
+    pio_sm_config c = n64_program_init(pio, sm, offset, 2, 16.625);
 
-  printf("Controller enabled.\n");
+    TU_LOG2("Controller enabled.\n");
 
-    while (1)
-    {
+    int wd_enabled = 0;
+
+    while (1) {
         uint32_t value = pio_sm_get_blocking(pio, sm);
         value = value >> 1;
 
-        if (value == 0x0 || value == 0xff)
-        {
+        if (value == 0x0 || value == 0xff) {
             uint32_t msg =
                 reverse(0x05) |
                 ((reverse(0x00)) << 8) |
@@ -197,9 +197,7 @@ int main(void)
 
             pio_sm_put_blocking(pio, sm, 23);
             pio_sm_put_blocking(pio, sm, msg);
-        }
-        else if (value == 0x1)
-        {
+        } else if (value == 0x1) {
 
             uint32_t msg = 0;
 
@@ -213,7 +211,18 @@ int main(void)
             pio_sm_put_blocking(pio, sm, msg);
         }
 
-//        printf("GOTDATA %u\n", value);
+	if (value != 0x00 && value != 0x01) {
+	    printf("GOTDATA %u\n", value);
+	}
+
+	if (!wd_enabled) {
+	    multicore_reset_core1();
+	    multicore_launch_core1(usb_host_process);
+	    watchdog_enable(100, 1);
+	    wd_enabled = 1;
+	} else {
+	    watchdog_update();
+	}
     }
 
     return 0;
