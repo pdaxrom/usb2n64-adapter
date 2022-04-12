@@ -32,8 +32,6 @@
 #include "hardware/clocks.h"
 #include "hardware/watchdog.h"
 
-#include "n64.pio.h"
-
 #include "bsp/board.h"
 #include "tusb.h"
 
@@ -52,6 +50,7 @@ void led_blinking_task(void);
 
 extern void xpad_task(void);
 extern void hid_app_task(void);
+extern void my_wait_us_asm(int n);
 
 /*------------- MAIN -------------*/
 void usb_host_process(void)
@@ -155,6 +154,100 @@ static uint8_t reverse(uint8_t b)
     return b;
 }
 
+static void write_1()
+{
+    gpio_put(N64_DIO_PIN, 0);
+    my_wait_us_asm(1);
+    gpio_put(N64_DIO_PIN, 1);
+    my_wait_us_asm(1);
+    my_wait_us_asm(1);
+    my_wait_us_asm(1);
+}
+
+static void write_0()
+{
+    gpio_put(N64_DIO_PIN, 0);
+    my_wait_us_asm(1);
+    my_wait_us_asm(1);
+    my_wait_us_asm(1);
+    gpio_put(N64_DIO_PIN, 1);
+    my_wait_us_asm(1);
+}
+
+static void send_stop()
+{
+    gpio_put(N64_DIO_PIN, 0);
+    my_wait_us_asm(1);
+    gpio_put(N64_DIO_PIN, 1);
+}
+
+// send a byte from LSB to MSB (proper serialization)
+static void send_byte(uint8_t b)
+{
+    for(int i = 0;i < 8;i++) { // send all 8 bits, one at a time
+        if((b >> i) & 1) {
+            write_1();
+        } else {
+            write_0();
+        }
+    }
+}
+
+static uint8_t get_middle_of_pulse()
+{
+    uint32_t ct = 0;
+    // wait for line to go high
+    while(!gpio_get(N64_DIO_PIN)) {
+        ct++;
+        if(ct == 200000) { // failsafe limit TBD
+	    return 0x50; // error code
+	}
+    }
+
+    ct = 0;
+    // wait for line to go low
+    while(gpio_get(N64_DIO_PIN)) {
+        ct++;
+	if(ct == 200000) {// failsafe limit TBD
+    	    return 0x51; // error code
+	}
+    }
+
+    // now we have the falling edge
+
+    // wait 2 microseconds to be in the middle of the pulse, and read. high --> 1.  low --> 0.
+    my_wait_us_asm(1);
+    my_wait_us_asm(1);
+
+    return gpio_get(N64_DIO_PIN) ? 1 : 0;
+}
+
+static uint32_t read_command()
+{
+    int bits_read = 0;
+    uint32_t command = 0;
+
+    while (1) {
+	my_wait_us_asm(1);
+	my_wait_us_asm(1);
+	command <<= 1;
+	command |= (gpio_get(N64_DIO_PIN) ? 1 : 0);
+
+	bits_read++;
+	if (bits_read == 9) {
+	    break;
+	}
+
+	while(!gpio_get(N64_DIO_PIN)) {
+	}
+
+	while(gpio_get(N64_DIO_PIN)) {
+	}
+    }
+
+    return command;
+}
+
 int main(void)
 {
     board_init();
@@ -172,20 +265,61 @@ int main(void)
     gpio_init(N64_DIO_PIN);
     gpio_pull_up(N64_DIO_PIN);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-//  stdio_init_all();
 
-    PIO pio = pio0;
-
-    uint offset = pio_add_program(pio, &n64_program);
-
-    uint sm = pio_claim_unused_sm(pio, true);
-    pio_sm_config c = n64_program_init(pio, sm, offset, 2, 16.625);
+    gpio_init(N64_DIO_PIN+1);
+    gpio_pull_up(N64_DIO_PIN+1);
+    gpio_set_dir(N64_DIO_PIN+1, GPIO_OUT);
 
     TU_LOG2("Controller enabled.\n");
 
     int wd_enabled = 0;
 
     while (1) {
+	while(!gpio_get(N64_DIO_PIN)) {
+	}
+
+	gpio_put(N64_DIO_PIN+1, 1);
+	while(gpio_get(N64_DIO_PIN)) {
+	}
+
+	uint32_t irq_status = save_and_disable_interrupts();
+
+	gpio_put(N64_DIO_PIN+1, 0);
+
+	uint32_t cmd = read_command();
+
+	cmd >>= 1;
+
+	if (cmd == 0x00) {
+	    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
+	    send_byte(reverse(0x05));
+	    send_byte(reverse(0x00));
+	    send_byte(reverse(0x02));
+	    send_stop();
+	    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
+	} else if (cmd == 0x01) {
+	    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
+	    send_byte(reverse(buttons[0]));
+	    send_byte(reverse(buttons[1]));
+	    send_byte(reverse(sticks[0]));
+	    send_byte(reverse(sticks[1]));
+	    send_stop();
+	    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
+	}
+
+	restore_interrupts(irq_status);
+
+	if (cmd != 0x00 && cmd != 0x01) {
+	    printf("Get command %02X\n", cmd);
+	}
+
+	if (!wd_enabled) {
+	    multicore_reset_core1();
+	    multicore_launch_core1(usb_host_process);
+	    wd_enabled = 1;
+	}
+
+#if 0
         uint32_t value = pio_sm_get_blocking(pio, sm);
         value = value >> 1;
 
@@ -216,13 +350,11 @@ int main(void)
 	}
 
 	if (!wd_enabled) {
-	    multicore_reset_core1();
-	    multicore_launch_core1(usb_host_process);
-	    watchdog_enable(100, 1);
+	    //multicore_reset_core1();
+	    //multicore_launch_core1(usb_host_process);
 	    wd_enabled = 1;
-	} else {
-	    watchdog_update();
 	}
+#endif
     }
 
     return 0;
