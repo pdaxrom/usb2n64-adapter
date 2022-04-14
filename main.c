@@ -31,6 +31,8 @@
 #include "pico/multicore.h"
 #include "hardware/clocks.h"
 #include "hardware/watchdog.h"
+#include "hardware/structs/iobank0.h"
+#include "hardware/irq.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
@@ -156,9 +158,9 @@ static uint8_t reverse(uint8_t b)
 
 static void write_1()
 {
-    gpio_put(N64_DIO_PIN, 0);
+    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
     my_wait_us_asm(1);
-    gpio_put(N64_DIO_PIN, 1);
+    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
     my_wait_us_asm(1);
     my_wait_us_asm(1);
     my_wait_us_asm(1);
@@ -166,19 +168,19 @@ static void write_1()
 
 static void write_0()
 {
-    gpio_put(N64_DIO_PIN, 0);
+    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
     my_wait_us_asm(1);
     my_wait_us_asm(1);
     my_wait_us_asm(1);
-    gpio_put(N64_DIO_PIN, 1);
+    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
     my_wait_us_asm(1);
 }
 
 static void send_stop()
 {
-    gpio_put(N64_DIO_PIN, 0);
+    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
     my_wait_us_asm(1);
-    gpio_put(N64_DIO_PIN, 1);
+    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 }
 
 // send a byte from LSB to MSB (proper serialization)
@@ -193,39 +195,11 @@ static void send_byte(uint8_t b)
     }
 }
 
-static uint8_t get_middle_of_pulse()
-{
-    uint32_t ct = 0;
-    // wait for line to go high
-    while(!gpio_get(N64_DIO_PIN)) {
-        ct++;
-        if(ct == 200000) { // failsafe limit TBD
-	    return 0x50; // error code
-	}
-    }
-
-    ct = 0;
-    // wait for line to go low
-    while(gpio_get(N64_DIO_PIN)) {
-        ct++;
-	if(ct == 200000) {// failsafe limit TBD
-    	    return 0x51; // error code
-	}
-    }
-
-    // now we have the falling edge
-
-    // wait 2 microseconds to be in the middle of the pulse, and read. high --> 1.  low --> 0.
-    my_wait_us_asm(1);
-    my_wait_us_asm(1);
-
-    return gpio_get(N64_DIO_PIN) ? 1 : 0;
-}
-
 static uint32_t read_command()
 {
     int bits_read = 0;
     uint32_t command = 0;
+    int timeout;
 
     while (1) {
 	my_wait_us_asm(1);
@@ -238,14 +212,59 @@ static uint32_t read_command()
 	    break;
 	}
 
-	while(!gpio_get(N64_DIO_PIN)) {
+	timeout = 300;
+	while(!gpio_get(N64_DIO_PIN) && timeout--) {
 	}
 
-	while(gpio_get(N64_DIO_PIN)) {
+	if (!timeout) {
+	    return -1;
+	}
+
+	timeout = 300;
+	while(gpio_get(N64_DIO_PIN) && timeout--) {
+	}
+
+	if (!timeout) {
+	    return -1;
 	}
     }
 
     return command;
+}
+
+static void gpio_irq_handler(void)
+{
+    io_irq_ctrl_hw_t *irq_ctrl_base = get_core_num() ?
+                                           &iobank0_hw->proc1_irq_ctrl : &iobank0_hw->proc0_irq_ctrl;
+
+    uint gpio = N64_DIO_PIN;
+    io_ro_32 *status_reg = &irq_ctrl_base->ints[gpio / 8];
+    uint events = (*status_reg >> 4 * (gpio % 8)) & 0xf;
+
+    if (events & GPIO_IRQ_EDGE_FALL) {
+
+	uint32_t cmd = read_command();
+
+	cmd >>= 1;
+
+	if (cmd == 0x00) {
+	    send_byte(reverse(0x05));
+	    send_byte(reverse(0x00));
+	    send_byte(reverse(0x02));
+	    send_stop();
+	} else if (cmd == 0x01) {
+	    send_byte(reverse(buttons[0]));
+	    send_byte(reverse(buttons[1]));
+	    send_byte(reverse(sticks[0]));
+	    send_byte(reverse(sticks[1]));
+	    send_stop();
+	}
+
+//	if (cmd != 0x00 && cmd != 0x01) {
+	    printf("Get command %X %X\n", cmd, events);
+//	}
+        gpio_acknowledge_irq(gpio, events);
+    }
 }
 
 int main(void)
@@ -266,95 +285,31 @@ int main(void)
     gpio_pull_up(N64_DIO_PIN);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 
-    gpio_init(N64_DIO_PIN+1);
-    gpio_pull_up(N64_DIO_PIN+1);
-    gpio_set_dir(N64_DIO_PIN+1, GPIO_OUT);
+//    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
+    gpio_put(N64_DIO_PIN, 0);
+//    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
+
+    multicore_reset_core1();
+    multicore_launch_core1(usb_host_process);
 
     TU_LOG2("Controller enabled.\n");
 
-    int wd_enabled = 0;
+    gpio_acknowledge_irq(N64_DIO_PIN, GPIO_IRQ_EDGE_FALL);
+    gpio_set_irq_enabled(N64_DIO_PIN, GPIO_IRQ_EDGE_FALL, true);
+    irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_irq_handler);
+    irq_set_enabled(IO_IRQ_BANK0, true);
+
+//    int wd_enabled = 0;
 
     while (1) {
-	while(!gpio_get(N64_DIO_PIN)) {
-	}
-
-	gpio_put(N64_DIO_PIN+1, 1);
-	while(gpio_get(N64_DIO_PIN)) {
-	}
-
-	uint32_t irq_status = save_and_disable_interrupts();
-
-	gpio_put(N64_DIO_PIN+1, 0);
-
-	uint32_t cmd = read_command();
-
-	cmd >>= 1;
-
-	if (cmd == 0x00) {
-	    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-	    send_byte(reverse(0x05));
-	    send_byte(reverse(0x00));
-	    send_byte(reverse(0x02));
-	    send_stop();
-	    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-	} else if (cmd == 0x01) {
-	    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-	    send_byte(reverse(buttons[0]));
-	    send_byte(reverse(buttons[1]));
-	    send_byte(reverse(sticks[0]));
-	    send_byte(reverse(sticks[1]));
-	    send_stop();
-	    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-	}
-
-	restore_interrupts(irq_status);
-
-	if (cmd != 0x00 && cmd != 0x01) {
-	    printf("Get command %02X\n", cmd);
-	}
-
-	if (!wd_enabled) {
-	    multicore_reset_core1();
-	    multicore_launch_core1(usb_host_process);
-	    wd_enabled = 1;
-	}
-
-#if 0
-        uint32_t value = pio_sm_get_blocking(pio, sm);
-        value = value >> 1;
-
-        if (value == 0x0 || value == 0xff) {
-            uint32_t msg =
-                reverse(0x05) |
-                ((reverse(0x00)) << 8) |
-                ((reverse(0x02)) << 16);
-
-            pio_sm_put_blocking(pio, sm, 23);
-            pio_sm_put_blocking(pio, sm, msg);
-        } else if (value == 0x1) {
-
-            uint32_t msg = 0;
-
-            msg =
-                reverse(buttons[0]) |
-              ((reverse(buttons[1])) << 8) |
-              ((reverse(sticks[0])) << 16) |
-              ((reverse(sticks[1])) << 24);
-
-            pio_sm_put_blocking(pio, sm, 31);
-            pio_sm_put_blocking(pio, sm, msg);
-        }
-
-	if (value != 0x00 && value != 0x01) {
-	    printf("GOTDATA %u\n", value);
-	}
-
-	if (!wd_enabled) {
-	    //multicore_reset_core1();
-	    //multicore_launch_core1(usb_host_process);
-	    wd_enabled = 1;
-	}
-#endif
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
+//	my_wait_us_asm(1);
     }
 
     return 0;
