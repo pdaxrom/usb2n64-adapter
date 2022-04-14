@@ -282,12 +282,9 @@ int main(void)
     TU_LOG2("clock sys = %d\n", clock_get_hz(clk_sys));
 
     gpio_init(N64_DIO_PIN);
+    gpio_put(N64_DIO_PIN, 0);
     gpio_pull_up(N64_DIO_PIN);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-
-//    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    gpio_put(N64_DIO_PIN, 0);
-//    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 
     multicore_reset_core1();
     multicore_launch_core1(usb_host_process);
@@ -299,17 +296,7 @@ int main(void)
     irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_irq_handler);
     irq_set_enabled(IO_IRQ_BANK0, true);
 
-//    int wd_enabled = 0;
-
     while (1) {
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
-//	my_wait_us_asm(1);
     }
 
     return 0;
