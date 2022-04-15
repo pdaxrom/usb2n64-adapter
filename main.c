@@ -33,6 +33,7 @@
 #include "hardware/watchdog.h"
 #include "hardware/structs/iobank0.h"
 #include "hardware/irq.h"
+#include "hardware/structs/systick.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
@@ -52,7 +53,6 @@ void led_blinking_task(void);
 
 extern void xpad_task(void);
 extern void hid_app_task(void);
-extern void my_wait_us_asm(int n);
 
 /*------------- MAIN -------------*/
 void usb_host_process(void)
@@ -156,30 +156,37 @@ static uint8_t reverse(uint8_t b)
     return b;
 }
 
+#define TICKS_1US	124
+
+static inline void wait_ticks(uint32_t count)
+{
+    systick_hw->rvr = 0xFFFFFF;
+    systick_hw->csr = 0x5;
+    uint32_t old = systick_hw->cvr;
+    while (old - systick_hw->cvr < count) {
+    }
+}
+
 static void write_1()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    my_wait_us_asm(1);
+    wait_ticks(TICKS_1US);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-    my_wait_us_asm(1);
-    my_wait_us_asm(1);
-    my_wait_us_asm(1);
+    wait_ticks(TICKS_1US * 3);
 }
 
 static void write_0()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    my_wait_us_asm(1);
-    my_wait_us_asm(1);
-    my_wait_us_asm(1);
+    wait_ticks(TICKS_1US * 3);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-    my_wait_us_asm(1);
+    wait_ticks(TICKS_1US);
 }
 
 static void send_stop()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    my_wait_us_asm(1);
+    wait_ticks(TICKS_1US);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 }
 
@@ -202,8 +209,7 @@ static uint32_t read_command()
     int timeout;
 
     while (1) {
-	my_wait_us_asm(1);
-	my_wait_us_asm(1);
+	wait_ticks(TICKS_1US * 2);
 	command <<= 1;
 	command |= (gpio_get(N64_DIO_PIN) ? 1 : 0);
 
@@ -242,6 +248,7 @@ static void gpio_irq_handler(void)
     uint events = (*status_reg >> 4 * (gpio % 8)) & 0xf;
 
     if (events & GPIO_IRQ_EDGE_FALL) {
+//        gpio_acknowledge_irq(gpio, events);
 
 	uint32_t cmd = read_command();
 
@@ -264,6 +271,8 @@ static void gpio_irq_handler(void)
 	    printf("Get command %X %X\n", cmd, events);
 //	}
         gpio_acknowledge_irq(gpio, events);
+    } else {
+	printf("unk irq\n");
     }
 }
 
@@ -293,6 +302,7 @@ int main(void)
 
     gpio_acknowledge_irq(N64_DIO_PIN, GPIO_IRQ_EDGE_FALL);
     gpio_set_irq_enabled(N64_DIO_PIN, GPIO_IRQ_EDGE_FALL, true);
+
     irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_irq_handler);
     irq_set_enabled(IO_IRQ_BANK0, true);
 

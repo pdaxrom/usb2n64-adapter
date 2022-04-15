@@ -11,7 +11,6 @@ add_executable(usb2n64_adapter)
 # Example source
 target_sources(usb2n64_adapter PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/main.c
-        ${CMAKE_CURRENT_LIST_DIR}/my_wait_us_asm.S
         )
 
 # Make sure TinyUSB can find tusb_config.h
