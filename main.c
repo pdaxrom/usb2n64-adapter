@@ -148,7 +148,7 @@ void led_blinking_task(void)
     led_state = 1 - led_state; // toggle
 }
 
-static uint8_t reverse(uint8_t b)
+static inline uint8_t reverse(uint8_t b)
 {
     b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
     b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
@@ -167,7 +167,7 @@ static inline void wait_ticks(uint32_t count)
     }
 }
 
-static void write_1()
+static inline void write_1()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
     wait_ticks(TICKS_1US);
@@ -175,7 +175,7 @@ static void write_1()
     wait_ticks(TICKS_1US * 3);
 }
 
-static void write_0()
+static inline void write_0()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
     wait_ticks(TICKS_1US * 3);
@@ -183,7 +183,7 @@ static void write_0()
     wait_ticks(TICKS_1US);
 }
 
-static void send_stop()
+static inline void send_stop()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
     wait_ticks(TICKS_1US);
@@ -191,7 +191,7 @@ static void send_stop()
 }
 
 // send a byte from LSB to MSB (proper serialization)
-static void send_byte(uint8_t b)
+static void __not_in_flash_func(send_byte)(uint8_t b)
 {
     for(int i = 0;i < 8;i++) { // send all 8 bits, one at a time
         if((b >> i) & 1) {
@@ -202,7 +202,7 @@ static void send_byte(uint8_t b)
     }
 }
 
-static uint32_t read_command()
+static uint32_t __not_in_flash_func(read_command)()
 {
     int bits_read = 0;
     uint32_t command = 0;
@@ -238,7 +238,7 @@ static uint32_t read_command()
     return command;
 }
 
-static void gpio_irq_handler(void)
+static void __not_in_flash_func(gpio_irq_handler)(void)
 {
     io_irq_ctrl_hw_t *irq_ctrl_base = get_core_num() ?
                                            &iobank0_hw->proc1_irq_ctrl : &iobank0_hw->proc0_irq_ctrl;
