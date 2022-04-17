@@ -40,8 +40,13 @@
 
 #define N64_DIO_PIN	2
 
+static uint8_t _dev_addr;
+
 static uint16_t m_vid = 0;
 static uint16_t m_pid = 0;
+
+static volatile uint8_t enable_vibro = 0;
+static volatile uint8_t disable_vibro = 0;
 
 static volatile uint8_t buttons[2] = { 0, 0 };
 static volatile uint8_t sticks[2] = { 0, 0 };
@@ -76,6 +81,8 @@ void usb_host_process(void)
 
 void tuh_mount_cb(uint8_t dev_addr)
 {
+    _dev_addr = dev_addr;
+
     tuh_vid_pid_get(dev_addr, &m_vid, &m_pid);
 
     printf("A device %04X:%04X with address %d is mounted\r\n", m_vid, m_pid, dev_addr);
@@ -128,9 +135,28 @@ void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report)
     }
 }
 
+static uint8_t start_vibro[] = {
+    0x09, 0x08, 0x00,
+    0x09, 0x00, 0x0f,
+    0x20, 0x20, 0x20, 0x20,
+    0x20, 0x00
+};
+
 void xpad_task(void)
 {
+    if (enable_vibro == 1) {
+//	printf("Start vibro\n");
+	start_vibro[5] = 0x0f;
+	tuh_xpad_write(_dev_addr, start_vibro, 12);
+	enable_vibro = 0;
+    }
 
+    if (disable_vibro == 1) {
+//	printf("Stop vibro\n");
+	//start_vibro[5] = 0x00;
+	//tuh_xpad_write(_dev_addr, start_vibro, 12);
+	disable_vibro = 0;
+    }
 }
 
 void led_blinking_task(void)
@@ -415,13 +441,22 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
 //	    debug_dump_16(&data_block[16]);
 	    //printf("Addr crc %04X, data crc %02X\n", calc_address_crc(cmd & 0xffff), calc_data_crc(data_block));
 //	    printf("Addr crc %04X\n", calc_addr_crc(cmd & 0xffff));
-	    printf("[%02X]\n", data_block[0]);
+//	    printf("[%02X]\n", data_block[0]);
+	    if ((cmd & 0xFFE0) == 0xC000) {
+		if (data_block[0] == 0x00) {
+		    // stop rumble pack
+		    disable_vibro = 1;
+		} else {
+		    // start rumble pack
+		    enable_vibro = 1;
+		}
+	    }
 	} else if ((cmd >> 16) == 0x02) {
 	
 	}
 
 //	if (cmd != 0x00 && cmd != 0x01) {
-	    printf("Get command %X %X\n", cmd, events);
+//	    printf("Get command %X %X\n", cmd, events);
 //	}
         gpio_acknowledge_irq(gpio, events);
     } else {

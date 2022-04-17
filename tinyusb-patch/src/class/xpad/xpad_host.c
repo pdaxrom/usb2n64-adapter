@@ -182,6 +182,13 @@ bool xpadh_set_config(uint8_t dev_addr, uint8_t itf_num)
   return true;
 }
 
+bool tuh_xpad_write(uint8_t dev_addr, uint8_t *report, int size)
+{
+    memmove(odata, report, size);
+
+    return tuh_xpad_send(dev_addr, odata, size, false);
+}
+
 bool xpadh_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t event, uint32_t xferred_bytes)
 {
   if (ep_addr != xpadh_data[dev_addr-1].ep_out[0]) {
