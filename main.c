@@ -148,6 +148,76 @@ void led_blinking_task(void)
     led_state = 1 - led_state; // toggle
 }
 
+void debug_dump_16(uint8_t *ptr)
+{
+    int i;
+    char tmp[128];
+    const char dig[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
+
+    memset(tmp, ' ', sizeof(tmp));
+    tmp[127] = 0;
+
+    for (i = 0; i < 16; i++) {
+	tmp[i * 3 + 0] = dig[ptr[i] >> 4];
+	tmp[i * 3 + 1] = dig[ptr[i] & 0xf];
+	tmp[i * 3 + 2] = ' ';
+	tmp[49 + i] = (ptr[i] >= 32) ? ptr[i] : '.';
+    }
+    tmp[48] = ' ';
+    tmp[65] = 0;
+    printf("DUMP16: %s\n", tmp);
+}
+
+static uint16_t __not_in_flash_func(calc_address_crc)(uint16_t address)
+{
+    /* CRC table */
+    uint16_t xor_table[16] = { 0x0, 0x0, 0x0, 0x0, 0x0, 0x15, 0x1F, 0x0B, 0x16, 0x19, 0x07, 0x0E, 0x1C, 0x0D, 0x1A, 0x01 };
+    uint16_t crc = 0;
+
+    /* Make sure we have a valid address */
+    address &= ~0x1F;
+
+    /* Go through each bit in the address, and if set, xor the right value into the output */
+    for(int i = 15; i >= 5; i--) {
+        /* Is this bit set? */
+        if(((address >> i) & 0x1)) {
+            crc ^= xor_table[i];
+        }
+    }
+
+    /* Just in case */
+    crc &= 0x1F;
+
+    /* Create a new address with the CRC appended */
+    return address | crc;
+}
+
+static uint8_t __not_in_flash_func(calc_data_crc)( uint8_t *data )
+{
+    uint8_t ret = 0;
+
+    for(int i = 0; i <= 32; i++) {
+        for(int j = 7; j >= 0; j--) {
+            int tmp = 0;
+
+            if(ret & 0x80) {
+                tmp = 0x85;
+            }
+
+            ret <<= 1;
+
+            if(i < 32) {
+                if(data[i] & (0x01 << j)) {
+                    ret |= 0x1;
+                }
+            }
+            ret ^= tmp;
+        }
+    }
+
+    return ret;
+}
+
 static inline uint8_t reverse(uint8_t b)
 {
     b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
@@ -186,8 +256,9 @@ static inline void write_0()
 static inline void send_stop()
 {
     gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    wait_ticks(TICKS_1US);
+    wait_ticks(TICKS_1US * 2);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
+    wait_ticks(TICKS_1US);
 }
 
 // send a byte from LSB to MSB (proper serialization)
@@ -202,6 +273,61 @@ static void __not_in_flash_func(send_byte)(uint8_t b)
     }
 }
 
+static uint8_t data_block[33];
+
+static int __not_in_flash_func(read_data_block)()
+{
+    uint8_t byte = 0;
+    int bits_read = 0;
+    int bytes_read = 0;
+
+    while (1) {
+	wait_ticks(TICKS_1US * 2);
+	byte <<= 1;
+	byte |= (gpio_get(N64_DIO_PIN) ? 1 : 0);
+
+	bits_read++;
+
+	if (bits_read == 8) {
+	    data_block[bytes_read++] = byte;
+	    byte = 0;
+	    bits_read = 0;
+	    if (bytes_read == 32) {
+		wait_ticks(TICKS_1US * 2); // console stop bit
+		wait_ticks(TICKS_1US);     //
+		uint8_t crc = calc_data_crc(data_block);
+		wait_ticks(TICKS_1US * 3);
+		send_byte(reverse(crc));
+		send_stop();
+		return bytes_read + 1;
+	    }
+	}
+
+	int timeout = 300;
+	while(!gpio_get(N64_DIO_PIN) && timeout--) {
+	}
+
+	if (timeout != 0) {
+	    timeout = 300;
+	    while(gpio_get(N64_DIO_PIN) && timeout--) {
+	    }
+	}
+
+	if (timeout == 0) {
+	    return bytes_read;
+	}
+    }
+}
+
+static int __not_in_flash_func(write_data_block)()
+{
+    data_block[32] = calc_data_crc(data_block);
+    for (int i = 0; i < 33; i++) {
+	send_byte(reverse(data_block[i]));
+    }
+    send_stop();
+}
+
 static uint32_t __not_in_flash_func(read_command)()
 {
     int bits_read = 0;
@@ -214,28 +340,47 @@ static uint32_t __not_in_flash_func(read_command)()
 	command |= (gpio_get(N64_DIO_PIN) ? 1 : 0);
 
 	bits_read++;
+
 	if (bits_read == 9) {
-	    break;
+	    // if not command 0x02 and 0x03
+	    if ((command >> 1) != 0x02 && (command >> 1) != 0x03) {
+		return command >> 1;
+	    }
 	}
+
+	// command 0x02 + address 2 bytes + stop bit
+//	if (bits_read == 25 && (command >> 16) == 0x02) {
+//	    return command >> 1;
+//	}
 
 	timeout = 300;
 	while(!gpio_get(N64_DIO_PIN) && timeout--) {
 	}
 
-	if (!timeout) {
+	if (timeout != 0) {
+	    timeout = 300;
+	    while(gpio_get(N64_DIO_PIN) && timeout--) {
+	    }
+	}
+
+	if (timeout == 0) {
 	    return -1;
 	}
 
-	timeout = 300;
-	while(gpio_get(N64_DIO_PIN) && timeout--) {
-	}
-
-	if (!timeout) {
-	    return -1;
+	// command 0x03 + address 2 bytes
+	if (bits_read == 24) {
+	    if ((command >> 16) == 0x03) {
+		if (read_data_block() != 33) {
+		    return -2;
+		}
+	    } else {
+		wait_ticks(TICKS_1US * 3); // skip console stop bit
+		memset(data_block, 0x80, 32);
+		write_data_block();
+	    }
+	    return command;
 	}
     }
-
-    return command;
 }
 
 static void __not_in_flash_func(gpio_irq_handler)(void)
@@ -252,12 +397,12 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
 
 	uint32_t cmd = read_command();
 
-	cmd >>= 1;
+//	cmd >>= 1;
 
 	if (cmd == 0x00) {
 	    send_byte(reverse(0x05));
 	    send_byte(reverse(0x00));
-	    send_byte(reverse(0x02));
+	    send_byte(reverse(0x01));
 	    send_stop();
 	} else if (cmd == 0x01) {
 	    send_byte(reverse(buttons[0]));
@@ -265,6 +410,14 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
 	    send_byte(reverse(sticks[0]));
 	    send_byte(reverse(sticks[1]));
 	    send_stop();
+	} else if ((cmd >> 16) == 0x03) {
+//	    debug_dump_16(&data_block[0]);
+//	    debug_dump_16(&data_block[16]);
+	    //printf("Addr crc %04X, data crc %02X\n", calc_address_crc(cmd & 0xffff), calc_data_crc(data_block));
+//	    printf("Addr crc %04X\n", calc_addr_crc(cmd & 0xffff));
+	    printf("[%02X]\n", data_block[0]);
+	} else if ((cmd >> 16) == 0x02) {
+	
 	}
 
 //	if (cmd != 0x00 && cmd != 0x01) {
