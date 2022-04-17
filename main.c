@@ -51,13 +51,17 @@ static volatile uint8_t disable_vibro = 0;
 static volatile uint8_t buttons[2] = { 0, 0 };
 static volatile uint8_t sticks[2] = { 0, 0 };
 
+static volatile uint8_t use_rumble_pack = 0;
+
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTYPES
 //--------------------------------------------------------------------+
-void led_blinking_task(void);
 
 extern void xpad_task(void);
 extern void hid_app_task(void);
+
+void led_blinking_task(void);
+void debug_dump_16(uint8_t *ptr);
 
 /*------------- MAIN -------------*/
 void usb_host_process(void)
@@ -132,7 +136,12 @@ void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report)
 	sticks[1] = analog_value(&report[12]);
 
 	//printf("RS %d %d\r\n", analog_value(&report[14]), analog_value(&report[16]));
+    } else if (report[0] == 0x07 && report[1] == 0x20) {
+	if (report[4] & 0x01) {
+	    use_rumble_pack = !use_rumble_pack;
+	}
     }
+    //debug_dump_16(report);
 }
 
 static uint8_t start_vibro[] = {
@@ -161,7 +170,7 @@ void xpad_task(void)
 
 void led_blinking_task(void)
 {
-    const uint32_t interval_ms = 1000;
+    const uint32_t interval_ms = use_rumble_pack ? 500 : 1000;
     static uint32_t start_ms = 0;
 
     static bool led_state = false;
@@ -299,9 +308,10 @@ static void __not_in_flash_func(send_byte)(uint8_t b)
     }
 }
 
-static uint8_t data_block[33];
+static uint8_t data_block[32];
+static uint8_t memory_pak[32768];
 
-static int __not_in_flash_func(read_data_block)()
+static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 {
     uint8_t byte = 0;
     int bits_read = 0;
@@ -325,7 +335,7 @@ static int __not_in_flash_func(read_data_block)()
 		wait_ticks(TICKS_1US * 3);
 		send_byte(reverse(crc));
 		send_stop();
-		return bytes_read + 1;
+		return bytes_read;
 	    }
 	}
 
@@ -340,17 +350,18 @@ static int __not_in_flash_func(read_data_block)()
 	}
 
 	if (timeout == 0) {
-	    return bytes_read;
+	    return -3;
 	}
     }
 }
 
-static int __not_in_flash_func(write_data_block)()
+static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
 {
-    data_block[32] = calc_data_crc(data_block);
-    for (int i = 0; i < 33; i++) {
+    uint8_t crc = calc_data_crc(data_block);
+    for (int i = 0; i < 32; i++) {
 	send_byte(reverse(data_block[i]));
     }
+    send_byte(reverse(crc));
     send_stop();
 }
 
@@ -396,13 +407,36 @@ static uint32_t __not_in_flash_func(read_command)()
 	// command 0x03 + address 2 bytes
 	if (bits_read == 24) {
 	    if ((command >> 16) == 0x03) {
-		if (read_data_block() != 33) {
+		if (read_data_block(data_block) != 32) {
 		    return -2;
+		}
+
+		uint32_t addr = command & 0xFFE0;
+
+		if (addr < 0x8000) {
+		    memmove(&memory_pak[addr], data_block, 32);
+		} else if (use_rumble_pack && (command & 0xFFE0) == 0xC000) {
+		    if (data_block[0] == 0x00) {
+			// stop rumble pack
+			disable_vibro = 1;
+		    } else {
+			// start rumble pack
+			enable_vibro = 1;
+		    }
 		}
 	    } else {
 		wait_ticks(TICKS_1US * 3); // skip console stop bit
-		memset(data_block, 0x80, 32);
-		write_data_block();
+
+		uint32_t addr = command & 0xFFE0;
+
+		if (addr < 0x8000) {
+		    memmove(data_block, &memory_pak[addr], 32);
+		} else if (use_rumble_pack) {
+		    memset(data_block, 0x80, 32);
+		} else {
+		    memset(data_block, 0x00, 32);
+		}
+		write_data_block(data_block);
 	    }
 	    return command;
 	}
@@ -442,21 +476,12 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
 	    //printf("Addr crc %04X, data crc %02X\n", calc_address_crc(cmd & 0xffff), calc_data_crc(data_block));
 //	    printf("Addr crc %04X\n", calc_addr_crc(cmd & 0xffff));
 //	    printf("[%02X]\n", data_block[0]);
-	    if ((cmd & 0xFFE0) == 0xC000) {
-		if (data_block[0] == 0x00) {
-		    // stop rumble pack
-		    disable_vibro = 1;
-		} else {
-		    // start rumble pack
-		    enable_vibro = 1;
-		}
-	    }
 	} else if ((cmd >> 16) == 0x02) {
 	
 	}
 
 //	if (cmd != 0x00 && cmd != 0x01) {
-//	    printf("Get command %X %X\n", cmd, events);
+//	    printf("Get command %X\n", cmd);
 //	}
         gpio_acknowledge_irq(gpio, events);
     } else {
