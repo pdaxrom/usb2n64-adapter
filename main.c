@@ -34,11 +34,17 @@
 #include "hardware/structs/iobank0.h"
 #include "hardware/irq.h"
 #include "hardware/structs/systick.h"
+#include "hardware/flash.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
 
 #define N64_DIO_PIN	2
+
+#define FLASH_TARGET_SIZE	(32 * 1024)
+#define FLASH_TARGET_OFFSET	(2 * 1024 * 1024 - 32 * 1024)
+
+const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
 
 static uint8_t _dev_addr;
 
@@ -52,6 +58,11 @@ static volatile uint8_t buttons[2] = { 0, 0 };
 static volatile uint8_t sticks[2] = { 0, 0 };
 
 static volatile uint8_t use_rumble_pack = 0;
+static volatile uint8_t memory_pak_changed = 0;
+static volatile uint16_t console_is_off = 0;
+
+static uint8_t data_block[32];
+static uint8_t memory_pak[32768];
 
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTYPES
@@ -261,7 +272,8 @@ static inline uint8_t reverse(uint8_t b)
     return b;
 }
 
-#define TICKS_1US	124
+#define TICKS_1US	172
+//#define TICKS_1US	175
 
 static inline void wait_ticks(uint32_t count)
 {
@@ -308,9 +320,6 @@ static void __not_in_flash_func(send_byte)(uint8_t b)
     }
 }
 
-static uint8_t data_block[32];
-static uint8_t memory_pak[32768];
-
 static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 {
     uint8_t byte = 0;
@@ -329,10 +338,10 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 	    byte = 0;
 	    bits_read = 0;
 	    if (bytes_read == 32) {
-		wait_ticks(TICKS_1US * 2); // console stop bit
-		wait_ticks(TICKS_1US);     //
+//		wait_ticks(TICKS_1US * 2); // console stop bit
+//		wait_ticks(TICKS_1US);     //
 		uint8_t crc = calc_data_crc(data_block);
-		wait_ticks(TICKS_1US * 3);
+//		wait_ticks(TICKS_1US * 3);
 		send_byte(reverse(crc));
 		send_stop();
 		return bytes_read;
@@ -365,6 +374,14 @@ static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
     send_stop();
 }
 
+static int __not_in_flash_func(write_data)(uint8_t *data_block, int size)
+{
+    for (int i = 0; i < size; i++) {
+	send_byte(reverse(data_block[i]));
+    }
+    send_stop();
+}
+
 static uint32_t __not_in_flash_func(read_command)()
 {
     int bits_read = 0;
@@ -381,14 +398,28 @@ static uint32_t __not_in_flash_func(read_command)()
 	if (bits_read == 9) {
 	    // if not command 0x02 and 0x03
 	    if ((command >> 1) != 0x02 && (command >> 1) != 0x03) {
-		return command >> 1;
+		command >>= 1;
+
+		wait_ticks(TICKS_1US * 4);
+
+		if (command == 0x00 || command == 0xFF) {
+		    data_block[0] = 0x05;
+		    data_block[1] = 0x00;
+		    data_block[2] = 0x01;
+		    write_data(data_block, 3);
+		} else if (command == 0x01) {
+		    data_block[0] = buttons[0];
+		    data_block[1] = buttons[1];
+		    data_block[2] = sticks[0];
+		    data_block[3] = sticks[1];
+		    write_data(data_block, 4);
+		} else {
+		    printf("Unk cmd %X\n", command);
+		}
+
+		return command;
 	    }
 	}
-
-	// command 0x02 + address 2 bytes + stop bit
-//	if (bits_read == 25 && (command >> 16) == 0x02) {
-//	    return command >> 1;
-//	}
 
 	timeout = 300;
 	while(!gpio_get(N64_DIO_PIN) && timeout--) {
@@ -415,6 +446,7 @@ static uint32_t __not_in_flash_func(read_command)()
 
 		if (addr < 0x8000) {
 		    memmove(&memory_pak[addr], data_block, 32);
+		    memory_pak_changed = 1;
 		} else if (use_rumble_pack && (command & 0xFFE0) == 0xC000) {
 		    if (data_block[0] == 0x00) {
 			// stop rumble pack
@@ -453,44 +485,43 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
     uint events = (*status_reg >> 4 * (gpio % 8)) & 0xf;
 
     if (events & GPIO_IRQ_EDGE_FALL) {
-//        gpio_acknowledge_irq(gpio, events);
-
+	uint32_t ints = save_and_disable_interrupts();
 	uint32_t cmd = read_command();
 
-//	cmd >>= 1;
-
-	if (cmd == 0x00) {
-	    send_byte(reverse(0x05));
-	    send_byte(reverse(0x00));
-	    send_byte(reverse(0x01));
-	    send_stop();
-	} else if (cmd == 0x01) {
-	    send_byte(reverse(buttons[0]));
-	    send_byte(reverse(buttons[1]));
-	    send_byte(reverse(sticks[0]));
-	    send_byte(reverse(sticks[1]));
-	    send_stop();
-	} else if ((cmd >> 16) == 0x03) {
-//	    debug_dump_16(&data_block[0]);
-//	    debug_dump_16(&data_block[16]);
-	    //printf("Addr crc %04X, data crc %02X\n", calc_address_crc(cmd & 0xffff), calc_data_crc(data_block));
-//	    printf("Addr crc %04X\n", calc_addr_crc(cmd & 0xffff));
-//	    printf("[%02X]\n", data_block[0]);
-	} else if ((cmd >> 16) == 0x02) {
-	
-	}
-
 //	if (cmd != 0x00 && cmd != 0x01) {
-//	    printf("Get command %X\n", cmd);
+//	printf(": %X\n", cmd);
 //	}
+
+	console_is_off = 0;
+
+	restore_interrupts (ints);
         gpio_acknowledge_irq(gpio, events);
     } else {
 	printf("unk irq\n");
     }
 }
 
+static void __not_in_flash_func(memory_pak_to_flash)(void)
+{
+    printf("Write memory pak to flash... ");
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_TARGET_SIZE);
+    flash_range_program(FLASH_TARGET_OFFSET, memory_pak, FLASH_TARGET_SIZE);
+    memory_pak_changed = 0;
+    restore_interrupts (ints);
+    printf("done\n");
+}
+
+static void __not_in_flash_func(main_loop)(void)
+{
+    while(1) {
+    }
+}
+
 int main(void)
 {
+    set_sys_clock_khz(180000, true);
+
     board_init();
 
     printf("USB to N64 adapter\n");
@@ -501,7 +532,11 @@ int main(void)
         TU_LOG2("Clean boot\n");
     }
 
-    TU_LOG2("clock sys = %d\n", clock_get_hz(clk_sys));
+    printf("clock sys = %d\n", clock_get_hz(clk_sys));
+
+    console_is_off = 0;
+    memory_pak_changed = 0;
+    memmove(memory_pak, flash_target_contents, FLASH_TARGET_SIZE);
 
     gpio_init(N64_DIO_PIN);
     gpio_put(N64_DIO_PIN, 0);
@@ -519,8 +554,22 @@ int main(void)
     irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_irq_handler);
     irq_set_enabled(IO_IRQ_BANK0, true);
 
-    while (1) {
-    }
+    main_loop();
+
+//    while (1) {
+#if 0
+	if (!gpio_get(N64_DIO_PIN)) {
+	    console_is_off++;
+	    if (console_is_off > 100) {
+		if (memory_pak_changed) {
+		    memory_pak_to_flash();
+		}
+		console_is_off = 0;
+	    }
+	}
+	sleep_ms(1);
+#endif
+//    }
 
     return 0;
 }
