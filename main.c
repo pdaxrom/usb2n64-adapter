@@ -34,10 +34,15 @@
 #include "hardware/structs/iobank0.h"
 #include "hardware/irq.h"
 #include "hardware/structs/systick.h"
+#include "hardware/pio.h"
 #include "hardware/flash.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
+
+#include "n64send.pio.h"
+
+#define USE_GPIO_IRQ
 
 #define N64_DIO_PIN	2
 
@@ -63,6 +68,9 @@ static volatile uint16_t console_is_off = 0;
 
 static uint8_t data_block[32];
 static uint8_t memory_pak[32768];
+
+static PIO pio;
+static uint sm;
 
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTYPES
@@ -272,11 +280,12 @@ static inline uint8_t reverse(uint8_t b)
     return b;
 }
 
-#define TICKS_1US	172
+#define TICKS_1US	197UL
 //#define TICKS_1US	175
 
 static inline void wait_ticks(uint32_t count)
 {
+    systick_hw->csr = 0x0;
     systick_hw->rvr = 0xFFFFFF;
     systick_hw->csr = 0x5;
     uint32_t old = systick_hw->cvr;
@@ -382,6 +391,8 @@ static int __not_in_flash_func(write_data)(uint8_t *data_block, int size)
     send_stop();
 }
 
+#define N64SEND_DATA(d0, d1, b) ((((b) - 1) << 16) | ((d0) << 8) | (d1))
+
 static uint32_t __not_in_flash_func(read_command)()
 {
     int bits_read = 0;
@@ -403,16 +414,42 @@ static uint32_t __not_in_flash_func(read_command)()
 		wait_ticks(TICKS_1US * 4);
 
 		if (command == 0x00 || command == 0xFF) {
+#if 0
 		    data_block[0] = 0x05;
 		    data_block[1] = 0x00;
 		    data_block[2] = 0x01;
 		    write_data(data_block, 3);
+#else
+		    uint32_t data[2] = { N64SEND_DATA(0x05, 0x00, 16), N64SEND_DATA(0x01, 0x00, 8) };
+
+		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		    pio->txf[sm] = data[0];
+		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		    pio->txf[sm] = data[1];
+		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		    pio->txf[sm] = 0;
+
+		    pio_sm_get_blocking(pio, sm);
+#endif
 		} else if (command == 0x01) {
+#if 0
 		    data_block[0] = buttons[0];
 		    data_block[1] = buttons[1];
 		    data_block[2] = sticks[0];
 		    data_block[3] = sticks[1];
 		    write_data(data_block, 4);
+#else
+		    uint32_t data[2] = { N64SEND_DATA(buttons[0], buttons[1], 16),  N64SEND_DATA(sticks[0], sticks[1], 16) };
+
+		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		    pio->txf[sm] = data[0];
+		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		    pio->txf[sm] = data[1];
+		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		    pio->txf[sm] = 0;
+
+		    pio_sm_get_blocking(pio, sm);
+#endif
 		} else {
 		    printf("Unk cmd %X\n", command);
 		}
@@ -485,16 +522,13 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
     uint events = (*status_reg >> 4 * (gpio % 8)) & 0xf;
 
     if (events & GPIO_IRQ_EDGE_FALL) {
-	uint32_t ints = save_and_disable_interrupts();
 	uint32_t cmd = read_command();
 
 //	if (cmd != 0x00 && cmd != 0x01) {
 //	printf(": %X\n", cmd);
 //	}
-
 	console_is_off = 0;
 
-	restore_interrupts (ints);
         gpio_acknowledge_irq(gpio, events);
     } else {
 	printf("unk irq\n");
@@ -515,12 +549,25 @@ static void __not_in_flash_func(memory_pak_to_flash)(void)
 static void __not_in_flash_func(main_loop)(void)
 {
     while(1) {
+#ifdef USE_GPIO_IRQ
+	__wfi();
+#else
+	while(!gpio_get(N64_DIO_PIN)) {
+	}
+
+	while(gpio_get(N64_DIO_PIN)) {
+	}
+
+	uint32_t cmd = read_command();
+
+	console_is_off = 0;
+#endif
     }
 }
 
 int main(void)
 {
-    set_sys_clock_khz(180000, true);
+    set_sys_clock_khz(200000, true);
 
     board_init();
 
@@ -543,16 +590,50 @@ int main(void)
     gpio_pull_up(N64_DIO_PIN);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 
+
+#if 1
+    {
+	pio = pio0;
+
+	uint offset = pio_add_program(pio, &n64send_program);
+
+	sm = pio_claim_unused_sm(pio, true);
+
+	pio_sm_config c = n64send_program_get_default_config(offset);
+
+	sm_config_set_in_shift(&c, false, false, 32);
+	sm_config_set_out_shift(&c, false, false, 32);
+
+	sm_config_set_in_pins(&c, N64_DIO_PIN);
+	sm_config_set_out_pins(&c, N64_DIO_PIN, 1);
+	sm_config_set_set_pins(&c, N64_DIO_PIN, 1);
+
+	pio_gpio_init(pio, N64_DIO_PIN);
+
+	pio_sm_set_consecutive_pindirs(pio, sm, N64_DIO_PIN, 1, false);
+
+	sm_config_set_clkdiv(&c, 16.625f);
+
+	pio_sm_init(pio, sm, offset, &c);
+
+	pio_sm_set_enabled(pio, sm, true);
+    }
+#endif
+
     multicore_reset_core1();
     multicore_launch_core1(usb_host_process);
 
     TU_LOG2("Controller enabled.\n");
 
+#ifdef USE_GPIO_IRQ
     gpio_acknowledge_irq(N64_DIO_PIN, GPIO_IRQ_EDGE_FALL);
     gpio_set_irq_enabled(N64_DIO_PIN, GPIO_IRQ_EDGE_FALL, true);
 
     irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_irq_handler);
     irq_set_enabled(IO_IRQ_BANK0, true);
+
+    printf("GPIO IRQ Enabled\n");
+#endif
 
     main_loop();
 

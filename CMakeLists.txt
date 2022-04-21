@@ -8,7 +8,8 @@ pico_sdk_init()
 
 add_executable(usb2n64_adapter)
 
-# Example source
+pico_generate_pio_header(usb2n64_adapter ${CMAKE_CURRENT_LIST_DIR}/n64send.pio)
+
 target_sources(usb2n64_adapter PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         )
@@ -17,11 +18,8 @@ target_sources(usb2n64_adapter PUBLIC
 target_include_directories(usb2n64_adapter PUBLIC
         ${CMAKE_CURRENT_LIST_DIR})
 
-# In addition to pico_stdlib required for common PicoSDK functionality, add dependency on tinyusb_host
-# for TinyUSB device support and tinyusb_board for the additional board support library used by the example
-target_link_libraries(usb2n64_adapter PUBLIC pico_stdlib pico_multicore hardware_flash tinyusb_host tinyusb_board)
+target_link_libraries(usb2n64_adapter PUBLIC pico_stdlib pico_multicore hardware_pio hardware_flash tinyusb_host tinyusb_board)
 
-# enable usb output, disable uart output
 pico_enable_stdio_usb(usb2n64_adapter 0)
 pico_enable_stdio_uart(usb2n64_adapter 1)
 
