@@ -49,6 +49,8 @@
 #define FLASH_TARGET_SIZE	(32 * 1024)
 #define FLASH_TARGET_OFFSET	(2 * 1024 * 1024 - 32 * 1024)
 
+#define N64SEND_DATA(d0, d1, b) ((((b) - 1) << 16) | ((d0) << 8) | (d1))
+
 const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
 
 static uint8_t _dev_addr;
@@ -351,8 +353,17 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 //		wait_ticks(TICKS_1US);     //
 		uint8_t crc = calc_data_crc(data_block);
 //		wait_ticks(TICKS_1US * 3);
-		send_byte(reverse(crc));
-		send_stop();
+
+		uint32_t data = N64SEND_DATA(crc, 0x00, 8);
+
+		while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		pio->txf[sm] = data;
+
+		while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+		pio->txf[sm] = 0;
+
+		pio_sm_get_blocking(pio, sm);
+
 		return bytes_read;
 	    }
 	}
@@ -376,22 +387,24 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
 {
     uint8_t crc = calc_data_crc(data_block);
-    for (int i = 0; i < 32; i++) {
-	send_byte(reverse(data_block[i]));
-    }
-    send_byte(reverse(crc));
-    send_stop();
-}
+    uint32_t data;
 
-static int __not_in_flash_func(write_data)(uint8_t *data_block, int size)
-{
-    for (int i = 0; i < size; i++) {
-	send_byte(reverse(data_block[i]));
+    for (int i = 0; i < 32; i += 2) {
+	data = N64SEND_DATA(data_block[i + 0], data_block[i + 1], 16);
+	while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+	pio->txf[sm] = data;
     }
-    send_stop();
-}
+    
+    data = N64SEND_DATA(crc, 0x00, 8);
 
-#define N64SEND_DATA(d0, d1, b) ((((b) - 1) << 16) | ((d0) << 8) | (d1))
+    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+    pio->txf[sm] = data;
+
+    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+    pio->txf[sm] = 0;
+
+    pio_sm_get_blocking(pio, sm);
+}
 
 static uint32_t __not_in_flash_func(read_command)()
 {
@@ -414,12 +427,6 @@ static uint32_t __not_in_flash_func(read_command)()
 		wait_ticks(TICKS_1US * 4);
 
 		if (command == 0x00 || command == 0xFF) {
-#if 0
-		    data_block[0] = 0x05;
-		    data_block[1] = 0x00;
-		    data_block[2] = 0x01;
-		    write_data(data_block, 3);
-#else
 		    uint32_t data[2] = { N64SEND_DATA(0x05, 0x00, 16), N64SEND_DATA(0x01, 0x00, 8) };
 
 		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
@@ -430,15 +437,7 @@ static uint32_t __not_in_flash_func(read_command)()
 		    pio->txf[sm] = 0;
 
 		    pio_sm_get_blocking(pio, sm);
-#endif
 		} else if (command == 0x01) {
-#if 0
-		    data_block[0] = buttons[0];
-		    data_block[1] = buttons[1];
-		    data_block[2] = sticks[0];
-		    data_block[3] = sticks[1];
-		    write_data(data_block, 4);
-#else
 		    uint32_t data[2] = { N64SEND_DATA(buttons[0], buttons[1], 16),  N64SEND_DATA(sticks[0], sticks[1], 16) };
 
 		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
@@ -449,7 +448,6 @@ static uint32_t __not_in_flash_func(read_command)()
 		    pio->txf[sm] = 0;
 
 		    pio_sm_get_blocking(pio, sm);
-#endif
 		} else {
 		    printf("Unk cmd %X\n", command);
 		}
@@ -589,7 +587,6 @@ int main(void)
     gpio_put(N64_DIO_PIN, 0);
     gpio_pull_up(N64_DIO_PIN);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-
 
 #if 1
     {
