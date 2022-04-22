@@ -81,8 +81,8 @@ static volatile uint pio_offset;
 #ifdef USE_PIO_DMA
 static volatile uint32_t pio_dma_chan;
 
-// 16 words (data) + 1 word (crc) + 1 word (stop) + 1 word (reset)
-static volatile uint32_t dma_buffer[19] __attribute__((aligned (16)));
+// 16 words (data) + 1 word (crc) + 1 word (stop)
+static volatile uint32_t dma_buffer[18] __attribute__((aligned (16)));
 #endif
 
 //--------------------------------------------------------------------+
@@ -306,42 +306,6 @@ static inline void wait_ticks(uint32_t count)
     }
 }
 
-static inline void write_1()
-{
-    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    wait_ticks(TICKS_1US);
-    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-    wait_ticks(TICKS_1US * 3);
-}
-
-static inline void write_0()
-{
-    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    wait_ticks(TICKS_1US * 3);
-    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-    wait_ticks(TICKS_1US);
-}
-
-static inline void send_stop()
-{
-    gpio_set_dir(N64_DIO_PIN, GPIO_OUT);
-    wait_ticks(TICKS_1US * 2);
-    gpio_set_dir(N64_DIO_PIN, GPIO_IN);
-    wait_ticks(TICKS_1US);
-}
-
-// send a byte from LSB to MSB (proper serialization)
-static void __not_in_flash_func(send_byte)(uint8_t b)
-{
-    for(int i = 0;i < 8;i++) { // send all 8 bits, one at a time
-        if((b >> i) & 1) {
-            write_1();
-        } else {
-            write_0();
-        }
-    }
-}
-
 static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 {
     uint8_t byte = 0;
@@ -365,6 +329,18 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 		uint8_t crc = calc_data_crc(data_block);
 //		wait_ticks(TICKS_1US * 3);
 
+#ifdef USE_PIO_DMA
+		dma_buffer[0] = N64SEND_DATA(crc, 0x00, 8);
+		dma_buffer[1] = 0;
+
+
+		pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
+
+		dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 2);
+		dma_channel_wait_for_finish_blocking(pio_dma_chan);
+
+		while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
+#else
 		uint32_t data = N64SEND_DATA(crc, 0x00, 8);
 
 		while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
@@ -374,7 +350,7 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 		pio->txf[sm] = 0;
 
 		pio_sm_get_blocking(pio, sm);
-
+#endif
 		return bytes_read;
 	    }
 	}
@@ -398,6 +374,20 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
 {
     uint8_t crc = calc_data_crc(data_block);
+#ifdef USE_PIO_DMA
+    for (int i = 0; i < 32; i+= 2) {
+	dma_buffer[i >> 1] = N64SEND_DATA(data_block[i + 0], data_block[i + 1], 16);
+    }
+    dma_buffer[16] = N64SEND_DATA(crc, 0x00, 8);
+    dma_buffer[17] = 0;
+
+    pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
+
+    dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 18);
+    dma_channel_wait_for_finish_blocking(pio_dma_chan);
+
+    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
+#else
     uint32_t data;
 
     for (int i = 0; i < 32; i += 2) {
@@ -415,6 +405,7 @@ static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
     pio->txf[sm] = 0;
 
     pio_sm_get_blocking(pio, sm);
+#endif
 }
 
 static uint32_t __not_in_flash_func(read_command)()
@@ -627,6 +618,8 @@ int main(void)
 
     {
 #ifdef USE_PIO_DMA
+	printf("PIO DMA enabled\n");
+
 	pio = pio0;
 
 	pio_offset = pio_add_program(pio, &n64send_dma_program);
@@ -696,7 +689,7 @@ int main(void)
     irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_irq_handler);
     irq_set_enabled(IO_IRQ_BANK0, true);
 
-    printf("GPIO IRQ Enabled\n");
+    printf("GPIO IRQ enabled\n");
 #endif
 
     main_loop();
