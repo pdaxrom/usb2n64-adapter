@@ -36,6 +36,7 @@
 #include "hardware/structs/systick.h"
 #include "hardware/pio.h"
 #include "hardware/flash.h"
+#include "hardware/dma.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
@@ -43,6 +44,8 @@
 #include "n64send.pio.h"
 
 #define USE_GPIO_IRQ
+
+#define USE_PIO_DMA
 
 #define N64_DIO_PIN	2
 
@@ -71,8 +74,16 @@ static volatile uint16_t console_is_off = 0;
 static uint8_t data_block[32];
 static uint8_t memory_pak[32768];
 
-static PIO pio;
-static uint sm;
+static volatile PIO pio;
+static volatile uint sm;
+static volatile uint pio_offset;
+
+#ifdef USE_PIO_DMA
+static volatile uint32_t pio_dma_chan;
+
+// 16 words (data) + 1 word (crc) + 1 word (stop) + 1 word (reset)
+static volatile uint32_t dma_buffer[19] __attribute__((aligned (16)));
+#endif
 
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTYPES
@@ -427,6 +438,18 @@ static uint32_t __not_in_flash_func(read_command)()
 		wait_ticks(TICKS_1US * 4);
 
 		if (command == 0x00 || command == 0xFF) {
+#ifdef USE_PIO_DMA
+		    dma_buffer[0] = N64SEND_DATA(0x05, 0x00, 16);
+		    dma_buffer[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    dma_buffer[2] = 0;
+
+		    pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
+
+		    dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 3);
+		    dma_channel_wait_for_finish_blocking(pio_dma_chan);
+
+		    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
+#else
 		    uint32_t data[2] = { N64SEND_DATA(0x05, 0x00, 16), N64SEND_DATA(0x01, 0x00, 8) };
 
 		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
@@ -437,7 +460,20 @@ static uint32_t __not_in_flash_func(read_command)()
 		    pio->txf[sm] = 0;
 
 		    pio_sm_get_blocking(pio, sm);
+#endif
 		} else if (command == 0x01) {
+#ifdef USE_PIO_DMA
+		    dma_buffer[0] = N64SEND_DATA(buttons[0], buttons[1], 16);
+		    dma_buffer[1] = N64SEND_DATA(sticks[0], sticks[1], 16);
+		    dma_buffer[2] = 0;
+
+		    pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
+
+		    dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 3);
+		    dma_channel_wait_for_finish_blocking(pio_dma_chan);
+
+		    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
+#else
 		    uint32_t data[2] = { N64SEND_DATA(buttons[0], buttons[1], 16),  N64SEND_DATA(sticks[0], sticks[1], 16) };
 
 		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
@@ -448,6 +484,7 @@ static uint32_t __not_in_flash_func(read_command)()
 		    pio->txf[sm] = 0;
 
 		    pio_sm_get_blocking(pio, sm);
+#endif
 		} else {
 		    printf("Unk cmd %X\n", command);
 		}
@@ -588,15 +625,42 @@ int main(void)
     gpio_pull_up(N64_DIO_PIN);
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 
-#if 1
     {
+#ifdef USE_PIO_DMA
 	pio = pio0;
 
-	uint offset = pio_add_program(pio, &n64send_program);
+	pio_offset = pio_add_program(pio, &n64send_dma_program);
 
 	sm = pio_claim_unused_sm(pio, true);
 
-	pio_sm_config c = n64send_program_get_default_config(offset);
+	pio_dma_chan = dma_claim_unused_channel(true);
+
+	dma_channel_config pio_dma_chan_config = dma_channel_get_default_config(pio_dma_chan);
+	channel_config_set_transfer_data_size(&pio_dma_chan_config, DMA_SIZE_32);
+	channel_config_set_read_increment(&pio_dma_chan_config, true);
+	channel_config_set_write_increment(&pio_dma_chan_config, false);
+	channel_config_set_dreq(&pio_dma_chan_config, pio_get_dreq(pio, sm, true));
+
+	dma_channel_configure(
+	    pio_dma_chan,
+	    &pio_dma_chan_config,
+	    &pio->txf[sm],
+	    NULL,
+	    0,
+	    false
+	);
+
+	pio_sm_config c = n64send_dma_program_get_default_config(pio_offset);
+#else
+
+	pio = pio0;
+
+	pio_offset = pio_add_program(pio, &n64send_program);
+
+	sm = pio_claim_unused_sm(pio, true);
+
+	pio_sm_config c = n64send_program_get_default_config(pio_offset);
+#endif
 
 	sm_config_set_in_shift(&c, false, false, 32);
 	sm_config_set_out_shift(&c, false, false, 32);
@@ -611,11 +675,14 @@ int main(void)
 
 	sm_config_set_clkdiv(&c, 16.625f);
 
-	pio_sm_init(pio, sm, offset, &c);
+#ifdef USE_PIO_DMA
+	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+#endif
+
+	pio_sm_init(pio, sm, pio_offset, &c);
 
 	pio_sm_set_enabled(pio, sm, true);
     }
-#endif
 
     multicore_reset_core1();
     multicore_launch_core1(usb_host_process);

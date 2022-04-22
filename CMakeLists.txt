@@ -18,7 +18,7 @@ target_sources(usb2n64_adapter PUBLIC
 target_include_directories(usb2n64_adapter PUBLIC
         ${CMAKE_CURRENT_LIST_DIR})
 
-target_link_libraries(usb2n64_adapter PUBLIC pico_stdlib pico_multicore hardware_pio hardware_flash tinyusb_host tinyusb_board)
+target_link_libraries(usb2n64_adapter PUBLIC pico_stdlib pico_multicore hardware_pio hardware_dma hardware_flash tinyusb_host tinyusb_board)
 
 pico_enable_stdio_usb(usb2n64_adapter 0)
 pico_enable_stdio_uart(usb2n64_adapter 1)
