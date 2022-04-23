@@ -69,7 +69,8 @@ static volatile uint8_t sticks[2] = { 0, 0 };
 
 static volatile uint8_t use_rumble_pack = 0;
 static volatile uint8_t memory_pak_changed = 0;
-static volatile uint16_t console_is_off = 0;
+
+static volatile bool core1_disable_irq = false;
 
 static uint8_t data_block[32];
 static uint8_t memory_pak[32768];
@@ -89,31 +90,10 @@ static volatile uint32_t dma_buffer[18] __attribute__((aligned (16)));
 // MACRO CONSTANT TYPEDEF PROTYPES
 //--------------------------------------------------------------------+
 
-extern void xpad_task(void);
 extern void hid_app_task(void);
 
-void led_blinking_task(void);
 void debug_dump_16(uint8_t *ptr);
 
-/*------------- MAIN -------------*/
-void usb_host_process(void)
-{
-    tusb_init();
-
-    while (1) {
-	tuh_task();
-
-	led_blinking_task();
-
-#if CFG_TUH_XPAD
-	xpad_task();
-#endif
-
-#if CFG_TUH_HID
-	hid_app_task();
-#endif
-    }
-}
 
 void tuh_mount_cb(uint8_t dev_addr)
 {
@@ -183,7 +163,7 @@ static uint8_t start_vibro[] = {
     0x20, 0x00
 };
 
-void xpad_task(void)
+static void xpad_task(void)
 {
     if (enable_vibro == 1) {
 //	printf("Start vibro\n");
@@ -200,7 +180,7 @@ void xpad_task(void)
     }
 }
 
-void led_blinking_task(void)
+static void led_blinking_task(void)
 {
     const uint32_t interval_ms = use_rumble_pack ? 500 : 1000;
     static uint32_t start_ms = 0;
@@ -213,6 +193,32 @@ void led_blinking_task(void)
 
     board_led_write(led_state);
     led_state = 1 - led_state; // toggle
+}
+
+void usb_host_process(void)
+{
+    tusb_init();
+
+    while (1) {
+	tuh_task();
+
+	led_blinking_task();
+
+#if CFG_TUH_XPAD
+	xpad_task();
+#endif
+
+#if CFG_TUH_HID
+	hid_app_task();
+#endif
+
+	if (core1_disable_irq) {
+	    uint32_t ints = save_and_disable_interrupts();
+	    multicore_fifo_push_blocking(0x4321);
+	    uint32_t g = multicore_fifo_pop_blocking();
+	    restore_interrupts(ints);
+	}
+    }
 }
 
 void debug_dump_16(uint8_t *ptr)
@@ -553,23 +559,11 @@ static void __not_in_flash_func(gpio_irq_handler)(void)
 //	if (cmd != 0x00 && cmd != 0x01) {
 //	printf(": %X\n", cmd);
 //	}
-	console_is_off = 0;
 
         gpio_acknowledge_irq(gpio, events);
     } else {
 	printf("unk irq\n");
     }
-}
-
-static void __not_in_flash_func(memory_pak_to_flash)(void)
-{
-    printf("Write memory pak to flash... ");
-    uint32_t ints = save_and_disable_interrupts();
-    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_TARGET_SIZE);
-    flash_range_program(FLASH_TARGET_OFFSET, memory_pak, FLASH_TARGET_SIZE);
-    memory_pak_changed = 0;
-    restore_interrupts (ints);
-    printf("done\n");
 }
 
 static void __not_in_flash_func(main_loop)(void)
@@ -585,9 +579,25 @@ static void __not_in_flash_func(main_loop)(void)
 	}
 
 	uint32_t cmd = read_command();
-
-	console_is_off = 0;
 #endif
+	if (!gpio_get(N64_DIO_PIN) && memory_pak_changed) {
+	    printf("Save memory pak: flash erase ... ");
+	    uint32_t ints = save_and_disable_interrupts();
+	    core1_disable_irq = true;
+	    uint32_t g = multicore_fifo_pop_blocking();
+
+
+	    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_TARGET_SIZE);
+	    printf("write ... ");
+	    flash_range_program(FLASH_TARGET_OFFSET, memory_pak, FLASH_TARGET_SIZE);
+
+	    memory_pak_changed = 0;
+	    core1_disable_irq = false;
+
+	    multicore_fifo_push_blocking(0x1234);
+	    restore_interrupts (ints);
+	    printf("done\n");
+	}
     }
 }
 
@@ -607,9 +617,10 @@ int main(void)
 
     printf("clock sys = %d\n", clock_get_hz(clk_sys));
 
-    console_is_off = 0;
+    printf("Load memory pak ... ");
     memory_pak_changed = 0;
     memmove(memory_pak, flash_target_contents, FLASH_TARGET_SIZE);
+    printf("done\n");
 
     gpio_init(N64_DIO_PIN);
     gpio_put(N64_DIO_PIN, 0);
@@ -677,6 +688,8 @@ int main(void)
 	pio_sm_set_enabled(pio, sm, true);
     }
 
+    core1_disable_irq = false;
+
     multicore_reset_core1();
     multicore_launch_core1(usb_host_process);
 
@@ -693,21 +706,6 @@ int main(void)
 #endif
 
     main_loop();
-
-//    while (1) {
-#if 0
-	if (!gpio_get(N64_DIO_PIN)) {
-	    console_is_off++;
-	    if (console_is_off > 100) {
-		if (memory_pak_changed) {
-		    memory_pak_to_flash();
-		}
-		console_is_off = 0;
-	    }
-	}
-	sleep_ms(1);
-#endif
-//    }
 
     return 0;
 }
