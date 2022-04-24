@@ -54,9 +54,17 @@
 
 #define N64SEND_DATA(d0, d1, b) ((((b) - 1) << 16) | ((d0) << 8) | (d1))
 
+enum {
+    USB_XPAD = 0,
+    USB_MOUSE,
+    USB_KEYBOARD
+};
+
 const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
 
 static uint8_t _dev_addr;
+
+static uint8_t input_device = USB_XPAD;
 
 static uint16_t m_vid = 0;
 static uint16_t m_pid = 0;
@@ -94,7 +102,6 @@ extern void hid_app_task(void);
 
 void debug_dump_16(uint8_t *ptr);
 
-
 void tuh_xpad_mount_cb(uint8_t dev_addr)
 {
     _dev_addr = dev_addr;
@@ -102,6 +109,8 @@ void tuh_xpad_mount_cb(uint8_t dev_addr)
     tuh_vid_pid_get(dev_addr, &m_vid, &m_pid);
 
     printf("A device %04X:%04X with address %d is mounted\r\n", m_vid, m_pid, dev_addr);
+
+    input_device = USB_XPAD;
 }
 
 static int8_t analog_value(uint8_t *val8)
@@ -219,6 +228,26 @@ void usb_host_process(void)
 	    restore_interrupts(ints);
 	}
     }
+}
+
+void enable_mouse(void)
+{
+    input_device = USB_MOUSE;
+}
+
+void update_mouse(uint8_t butts, uint8_t x, uint8_t y, uint8_t wheel)
+{
+    uint8_t b = 0;
+    uint8_t b1 = 0;
+    if (butts & MOUSE_BUTTON_LEFT)   b |= 0x80; // MOUSE LB  A
+    if (butts & MOUSE_BUTTON_RIGHT)  b |= 0x40; // MOUSE RB  B
+    if (butts & MOUSE_BUTTON_MIDDLE) b |= 0x10; // MOUSE MB  START
+    if (wheel > 0) b1 |= 0x08;                  // MOUSE W-U C-U
+    if (wheel < 0) b1 |= 0x04;                  // MOUSE W-D C-D
+    buttons[0] = b;
+    buttons[1] = b1;
+    sticks[0] = x;
+    sticks[1] = -y;
 }
 
 void debug_dump_16(uint8_t *ptr)
@@ -436,8 +465,16 @@ static uint32_t __not_in_flash_func(read_command)()
 
 		if (command == 0x00 || command == 0xFF) {
 #ifdef USE_PIO_DMA
-		    dma_buffer[0] = N64SEND_DATA(0x05, 0x00, 16);
-		    dma_buffer[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    if (input_device == USB_MOUSE) {
+			dma_buffer[0] = N64SEND_DATA(0x02, 0x00, 16);
+			dma_buffer[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    } else if (input_device == USB_KEYBOARD) {
+			dma_buffer[0] = N64SEND_DATA(0x00, 0x02, 16);
+			dma_buffer[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    } else {
+			dma_buffer[0] = N64SEND_DATA(0x05, 0x00, 16);
+			dma_buffer[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    }
 		    dma_buffer[2] = 0;
 
 		    pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
@@ -447,7 +484,18 @@ static uint32_t __not_in_flash_func(read_command)()
 
 		    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
 #else
-		    uint32_t data[2] = { N64SEND_DATA(0x05, 0x00, 16), N64SEND_DATA(0x01, 0x00, 8) };
+		    uint32_t data[2];
+
+		    if (input_device == USB_MOUSE) {
+			data[0] = N64SEND_DATA(0x02, 0x00, 16);
+			data[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    } else if (input_device == USB_KEYBOARD) {
+			data[0] = N64SEND_DATA(0x00, 0x02, 16);
+			data[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    } else {
+			data[0] = N64SEND_DATA(0x05, 0x00, 16);
+			data[1] = N64SEND_DATA(0x01, 0x00, 8);
+		    }
 
 		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
 		    pio->txf[sm] = data[0];
@@ -460,27 +508,46 @@ static uint32_t __not_in_flash_func(read_command)()
 #endif
 		} else if (command == 0x01) {
 #ifdef USE_PIO_DMA
-		    dma_buffer[0] = N64SEND_DATA(buttons[0], buttons[1], 16);
-		    dma_buffer[1] = N64SEND_DATA(sticks[0], sticks[1], 16);
-		    dma_buffer[2] = 0;
+		    int size;
+		    if (input_device != USB_KEYBOARD) {
+			dma_buffer[0] = N64SEND_DATA(buttons[0], buttons[1], 16);
+			dma_buffer[1] = N64SEND_DATA(sticks[0], sticks[1], 16);
+			dma_buffer[2] = 0;
+			size = 3;
+		    } else {
+			size = 7;
+		    }
 
 		    pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
 
-		    dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 3);
+		    dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, size);
 		    dma_channel_wait_for_finish_blocking(pio_dma_chan);
 
 		    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
-#else
-		    uint32_t data[2] = { N64SEND_DATA(buttons[0], buttons[1], 16),  N64SEND_DATA(sticks[0], sticks[1], 16) };
 
-		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		    pio->txf[sm] = data[0];
-		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		    pio->txf[sm] = data[1];
-		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		    pio->txf[sm] = 0;
+		    if (input_device == USB_MOUSE) {
+			sticks[0] = 0;
+			sticks[1] = 0;
+		    }
+#else
+		    if (input_device != USB_KEYBOARD) {
+			uint32_t data[2] = { N64SEND_DATA(buttons[0], buttons[1], 16),  N64SEND_DATA(sticks[0], sticks[1], 16) };
+
+			while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+			pio->txf[sm] = data[0];
+			while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+			pio->txf[sm] = data[1];
+			while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
+			pio->txf[sm] = 0;
+		    } else {
+		    }
 
 		    pio_sm_get_blocking(pio, sm);
+
+		    if (input_device == USB_MOUSE) {
+			sticks[0] = 0;
+			sticks[1] = 0;
+		    }
 #endif
 		} else {
 		    printf("Unk cmd %X\n", command);
