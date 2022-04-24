@@ -95,7 +95,7 @@ extern void hid_app_task(void);
 void debug_dump_16(uint8_t *ptr);
 
 
-void tuh_mount_cb(uint8_t dev_addr)
+void tuh_xpad_mount_cb(uint8_t dev_addr)
 {
     _dev_addr = dev_addr;
 

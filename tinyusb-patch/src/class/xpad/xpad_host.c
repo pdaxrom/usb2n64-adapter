@@ -177,7 +177,7 @@ bool xpadh_set_config(uint8_t dev_addr, uint8_t itf_num)
     TU_LOG2("tuh_xpad_receive error");
   }
 
-  tuh_mount_cb(dev_addr);
+  tuh_xpad_mount_cb(dev_addr);
 
   return true;
 }

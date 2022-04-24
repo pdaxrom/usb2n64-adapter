@@ -112,6 +112,8 @@ bool tuh_xpad_receive(uint8_t dev_addr, void * p_buffer, uint32_t length, bool i
 
 void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report);
 
+void tuh_xpad_mount_cb(uint8_t dev_addr);
+
 bool tuh_xpad_write(uint8_t dev_addr, uint8_t *report, int size);
 
 /// @} // group XPAD_Serial_Host
