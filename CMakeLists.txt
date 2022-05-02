@@ -13,6 +13,7 @@ pico_generate_pio_header(usb2n64_adapter ${CMAKE_CURRENT_LIST_DIR}/n64send.pio)
 target_sources(usb2n64_adapter PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         ${CMAKE_CURRENT_LIST_DIR}/hid_app.c
+        ${CMAKE_CURRENT_LIST_DIR}/hid_parser.c
         )
 
 # Make sure TinyUSB can find tusb_config.h

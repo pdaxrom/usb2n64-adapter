@@ -26,6 +26,8 @@
 #include "bsp/board.h"
 #include "tusb.h"
 
+#include "hid_parser.h"
+
 //--------------------------------------------------------------------+
 // MACRO TYPEDEF CONSTANT ENUM DECLARATION
 //--------------------------------------------------------------------+
@@ -42,8 +44,8 @@ static uint8_t const keycode2ascii[128][2] =  { HID_KEYCODE_TO_ASCII };
 static struct
 {
   uint8_t report_count;
-  tuh_hid_report_info_t report_info[MAX_REPORT];
-}hid_info[CFG_TUH_HID];
+  hid_report_info_t report_info[MAX_REPORT];
+} hid_info[CFG_TUH_HID];
 
 extern void enable_mouse(void);
 extern void update_mouse(uint8_t buttons, uint8_t x, uint8_t y, uint8_t wheel);
@@ -85,8 +87,9 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
   case HID_ITF_PROTOCOL_NONE:
     // By default host stack will use activate boot protocol on supported interface.
     // Therefore for this simple example, we only need to parse generic report descriptor (with built-in parser)
-    hid_info[instance].report_count = tuh_hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
+    hid_info[instance].report_count = hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
     printf("HID has %u reports \r\n", hid_info[instance].report_count);
+
     break;
   }
 
@@ -235,6 +238,8 @@ static void process_mouse_report(hid_mouse_report_t const * report)
   //------------- cursor movement -------------//
   cursor_movement(report->x, report->y, report->wheel);
 
+  TU_LOG2_MEM((uint8_t *)report, sizeof(hid_mouse_report_t), 2);
+
   update_mouse(report->buttons, report->x, report->y, report->wheel);
 }
 
@@ -246,8 +251,8 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
   (void) dev_addr;
 
   uint8_t const rpt_count = hid_info[instance].report_count;
-  tuh_hid_report_info_t* rpt_info_arr = hid_info[instance].report_info;
-  tuh_hid_report_info_t* rpt_info = NULL;
+  hid_report_info_t* rpt_info_arr = hid_info[instance].report_info;
+  hid_report_info_t* rpt_info = NULL;
 
   if ( rpt_count == 1 && rpt_info_arr[0].report_id == 0)
   {
@@ -285,6 +290,9 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
   // - Consumer Control (Media Key) : Consumer, Consumer Control
   // - System Control (Power key)   : Desktop, System Control
   // - Generic (vendor)             : 0xFFxx, xx
+
+printf(">>>>>>>> %X %X\n", rpt_info->usage_page, rpt_info->usage);
+
   if ( rpt_info->usage_page == HID_USAGE_PAGE_DESKTOP )
   {
     switch (rpt_info->usage)
@@ -299,6 +307,20 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
         TU_LOG1("HID receive mouse report\r\n");
         // Assume mouse follow boot report layout
         process_mouse_report( (hid_mouse_report_t const*) report );
+      break;
+
+      case HID_USAGE_DESKTOP_JOYSTICK:
+        TU_LOG1("HID receive joystick report\r\n");
+        TU_LOG2_MEM((uint8_t *)report, 8, 2);
+        // Assume mouse follow boot report layout
+        //process_mouse_report( (hid_mouse_report_t const*) report );
+      break;
+
+      case HID_USAGE_DESKTOP_GAMEPAD:
+        TU_LOG1("HID receive gamepad report\r\n");
+        TU_LOG2_MEM((uint8_t *)report, 8, 2);
+        // Assume mouse follow boot report layout
+        //process_mouse_report( (hid_mouse_report_t const*) report );
       break;
 
       default: break;

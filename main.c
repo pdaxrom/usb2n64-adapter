@@ -47,7 +47,7 @@
 
 #define USE_PIO_DMA
 
-#define N64_DIO_PIN	2
+#define N64_DIO_PIN	14
 
 #define FLASH_TARGET_SIZE	(32 * 1024)
 #define FLASH_TARGET_OFFSET	(2 * 1024 * 1024 - 32 * 1024)
