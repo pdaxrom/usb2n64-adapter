@@ -113,9 +113,9 @@ void tuh_xpad_mount_cb(uint8_t dev_addr)
     input_device = USB_XPAD;
 }
 
-static int8_t analog_value(uint8_t *val8)
+static int8_t analog_value(int16_t val)
 {
-    int16_t val = *((int16_t *) val8) / 0x190;
+    val = val / 0x190;
 
     if (val < 10 && val > -10) return 0;
 
@@ -126,65 +126,55 @@ static int8_t analog_value(uint8_t *val8)
     return val;
 }
 
-void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report)
+void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report, xpad_controller_t *info)
 {
     uint8_t b = 0;
     uint8_t b1 = 0;
 
-    if (report[0] == 0x20) {
-	if (report[5] & 0x01) b |= 0x08; // D-U    D-UP
-	if (report[5] & 0x02) b |= 0x04; // D-D    D-D
-	if (report[5] & 0x04) b |= 0x02; // D-L    D-L
-	if (report[5] & 0x08) b |= 0x01; // D-R    D-R
+//printf("buttons %04X lx=%d ly=%d rx=%d ry=%d lt=%d rt=%d\n", info->buttons, info->lx, info->ly, info->rx, info->ry, info->lt, info->rt);
 
-	if (analog_value(&report[16]) > 40)  b1|= 0x08; // RS-U  C-U
-	if (analog_value(&report[16]) < -40) b1|= 0x04; // RS-D  C-D
-	if (analog_value(&report[14]) < -40) b1|= 0x02; // RS-L  C-L
-	if (analog_value(&report[14]) > 40)  b1|= 0x01; // RS-R  C-R
+    if (info->buttons & XPAD_HAT_UP)    b |= 0x08; // D-U    D-UP
+    if (info->buttons & XPAD_HAT_DOWN)  b |= 0x04; // D-D    D-D
+    if (info->buttons & XPAD_HAT_LEFT)  b |= 0x02; // D-L    D-L
+    if (info->buttons & XPAD_HAT_RIGHT) b |= 0x01; // D-R    D-R
 
-	if (report[4] & 0x10) b |= 0x80; // A      A
-	if (report[4] & 0x20) b |= 0x40; // B      B
-	if (*((int16_t *)&report[8]) > 0x180) b |= 0x20; // LT    Z
-	if (*((int16_t *)&report[6]) > 0x180) b |= 0x20; // LT    Z
-	if (report[4] & 0x04) b |= 0x10; // START  START
+    if (analog_value(info->ry) > 40)    b1|= 0x08; // RS-U  C-U
+    if (analog_value(info->ry) < -40)   b1|= 0x04; // RS-D  C-D
+    if (analog_value(info->rx) < -40)   b1|= 0x02; // RS-L  C-L
+    if (analog_value(info->rx) > 40)    b1|= 0x01; // RS-R  C-R
 
-	if (report[5] & 0x10) b1|= 0x20; // LB      L
-	if (report[5] & 0x20) b1|= 0x10; // RB      R
+    if (info->buttons & XPAD_PAD_A)     b |= 0x80; // A      A
+    if (info->buttons & XPAD_PAD_B)     b |= 0x40; // B      B
+    if (info->lt > 512)                 b |= 0x20; // LT    Z
+    if (info->rt > 512)                 b |= 0x20; // LT    Z
+    if (info->buttons & XPAD_START)     b |= 0x10; // START  START
 
-	buttons[0] = b;
-	buttons[1] = b1;
-	sticks[0] = analog_value(&report[10]);
-	sticks[1] = analog_value(&report[12]);
+    if (info->buttons & XPAD_PAD_LB)    b1|= 0x20; // LB      L
+    if (info->buttons & XPAD_PAD_RB)    b1|= 0x10; // RB      R
 
-	//printf("RS %d %d\r\n", analog_value(&report[14]), analog_value(&report[16]));
-    } else if (report[0] == 0x07 && report[1] == 0x20) {
-	if (report[4] & 0x01) {
-	    use_rumble_pack = !use_rumble_pack;
-	}
+    buttons[0] = b;
+    buttons[1] = b1;
+    sticks[0] = analog_value(info->lx);
+    sticks[1] = analog_value(info->ly);
+
+    if (info->buttons & XPAD_XLOGO) {
+	use_rumble_pack = !use_rumble_pack;
     }
+
     //debug_dump_16(report);
 }
-
-static uint8_t start_vibro[] = {
-    0x09, 0x08, 0x00,
-    0x09, 0x00, 0x0f,
-    0x20, 0x20, 0x20, 0x20,
-    0x20, 0x00
-};
 
 static void xpad_task(void)
 {
     if (enable_vibro == 1) {
+        tuh_xpad_vibro(_dev_addr, 1);
 //	printf("Start vibro\n");
-	start_vibro[5] = 0x0f;
-	tuh_xpad_write(_dev_addr, start_vibro, 12);
 	enable_vibro = 0;
     }
 
     if (disable_vibro == 1) {
+        tuh_xpad_vibro(_dev_addr, 0);
 //	printf("Stop vibro\n");
-	//start_vibro[5] = 0x00;
-	//tuh_xpad_write(_dev_addr, start_vibro, 12);
 	disable_vibro = 0;
     }
 }
