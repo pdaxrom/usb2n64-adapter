@@ -255,7 +255,9 @@ bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, uint8_t
         if (report_info_arr->item[i].item_type == type &&
             report_info_arr->item[i].attributes.usage.page == page) {
             if (item) {
-                if (i + bit < report_info_arr->num_items) {
+                if (i + bit < report_info_arr->num_items &&
+                   report_info_arr->item[i + bit].item_type == type &&
+                   report_info_arr->item[i + bit].attributes.usage.page == page) {
                     *item = &report_info_arr->item[i + bit];
                 } else {
                     return false;
