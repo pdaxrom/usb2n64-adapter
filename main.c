@@ -133,7 +133,7 @@ void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report, xpad_controller_t *info
     uint8_t b = 0;
     uint8_t b1 = 0;
 
-//printf("buttons %04X lx=%d ly=%d rx=%d ry=%d lt=%d rt=%d\n", info->buttons, info->lx, info->ly, info->rx, info->ry, info->lt, info->rt);
+//    printf("buttons %04X lx=%d ly=%d rx=%d ry=%d lt=%d rt=%d\n", info->buttons, info->lx, info->ly, info->rx, info->ry, info->lt, info->rt);
 
     if (info->buttons & XPAD_HAT_UP)    b |= 0x08; // D-U    D-UP
     if (info->buttons & XPAD_HAT_DOWN)  b |= 0x04; // D-D    D-D
@@ -238,15 +238,20 @@ void enable_hid_gamepad(void)
     input_device = USB_HID_GAMEPAD;
 }
 
-void update_mouse(uint8_t butts, uint8_t x, uint8_t y, uint8_t wheel)
+void update_mouse(uint8_t butts, int8_t x, int8_t y, int8_t wheel, int8_t acpan)
 {
     uint8_t b = 0;
     uint8_t b1 = 0;
+
+//    printf("buttons=%02X x=%d y=%d wheel=%d acpan=%d\n", butts, x, y, wheel, acpan);
+
     if (butts & MOUSE_BUTTON_LEFT)   b |= 0x80; // MOUSE LB  A
     if (butts & MOUSE_BUTTON_RIGHT)  b |= 0x40; // MOUSE RB  B
     if (butts & MOUSE_BUTTON_MIDDLE) b |= 0x10; // MOUSE MB  START
     if (wheel > 0) b1 |= 0x08;                  // MOUSE W-U C-U
     if (wheel < 0) b1 |= 0x04;                  // MOUSE W-D C-D
+    if (acpan > 0) b1 |= 0x02;                  // MOUSE W-L C-L
+    if (acpan < 0) b1 |= 0x01;                  // MOUSE W-R C-R
     buttons[0] = b;
     buttons[1] = b1;
     sticks[0] = x;

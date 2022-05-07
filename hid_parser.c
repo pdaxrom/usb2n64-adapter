@@ -28,10 +28,10 @@ uint8_t hid_parse_report_descriptor(hid_report_info_t* report_info_arr, uint8_t 
 
   // current parsed report count & size from descriptor
   uint16_t ri_global_usage_page = 0;
-  uint16_t ri_global_logical_min = 0;
-  uint16_t ri_global_logical_max = 0;
-  uint16_t ri_global_physical_min = 0;
-  uint16_t ri_global_physical_max = 0;
+  int32_t ri_global_logical_min = 0;
+  int32_t ri_global_logical_max = 0;
+  int32_t ri_global_physical_min = 0;
+  int32_t ri_global_physical_max = 0;
   uint8_t ri_report_count = 0;
   uint8_t ri_report_size = 0;
   uint8_t ri_report_usage_count = 0;
@@ -48,11 +48,12 @@ uint8_t hid_parse_report_descriptor(hid_report_info_t* report_info_arr, uint8_t 
     uint8_t const size = header.size;
 
     uint32_t data;
+    uint32_t sdata;
     switch (size) {
-    case 1: data = desc_report[0]; break;
-    case 2: data = (desc_report[1] << 8) | desc_report[0]; break;
-    case 3: data = (desc_report[3] << 24) | (desc_report[2] << 16) | (desc_report[1] << 8) | desc_report[0]; break;
-    default: data = 0;
+    case 1: data = desc_report[0]; sdata = ((data & 0x80) ? 0xFFFFFF00 : 0 ) | data; break;
+    case 2: data = (desc_report[1] << 8) | desc_report[0]; sdata = ((data & 0x8000) ? 0xFFFF0000 : 0 ) | data;  break;
+    case 3: data = (desc_report[3] << 24) | (desc_report[2] << 16) | (desc_report[1] << 8) | desc_report[0]; sdata = data; break;
+    default: data = 0; sdata = 0;
     }
 
     TU_LOG2("tag = %d, type = %d, size = %d, data = ", tag, type, size);
@@ -122,16 +123,16 @@ uint8_t hid_parse_report_descriptor(hid_report_info_t* report_info_arr, uint8_t 
           break;
 
           case RI_GLOBAL_LOGICAL_MIN   :
-            ri_global_logical_min = data;
+            ri_global_logical_min = sdata;
           break;
           case RI_GLOBAL_LOGICAL_MAX   :
-            ri_global_logical_max = data;
+            ri_global_logical_max = sdata;
           break;
           case RI_GLOBAL_PHYSICAL_MIN  :
-            ri_global_physical_min = data;
+            ri_global_physical_min = sdata;
           break;
           case RI_GLOBAL_PHYSICAL_MAX  :
-            ri_global_physical_max = data;
+            ri_global_physical_max = sdata;
           break;
 
           case RI_GLOBAL_REPORT_ID:
@@ -281,17 +282,22 @@ bool hid_parse_get_item_value(const hid_report_item_t *item, const uint8_t *repo
     uint8_t offs  = item->bit_offset >> 3;
     uint32_t mask = ~(0xFFFFFFFF << item->bit_size);
 
-    uint32_t val = report[offs++] >> boffs;
-
-//printf("boffs=%d pos=%d offs=%d mask=%08X val=%02X\n", boffs, pos, offs, mask, val);
+    int32_t val = report[offs++] >> boffs;
 
     while (item->bit_size > pos) {
         val |= (report[offs++] << pos);
         pos += 8;
-//printf("val=%08X pos=%d\n", val, pos);
     }
 
-    *value = val & mask;
+    val &= mask;
+
+    if (item->attributes.logical.min < 0) {
+        if (val & (1 << (item->bit_size - 1))) {
+            val |= (0xFFFFFFFF << item->bit_size);
+        }
+    }
+
+    *value = val;
 
     return true;
 }

@@ -67,14 +67,29 @@ typedef struct {
     const hid_report_item_t *sr;
 } gamepad_items_t;
 
+typedef struct {
+    const hid_report_item_t *x;
+    const hid_report_item_t *y;
+    const hid_report_item_t *wheel;
+    const hid_report_item_t *acpan;
+    const hid_report_item_t *lb;
+    const hid_report_item_t *mb;
+    const hid_report_item_t *rb;
+    const hid_report_item_t *bw;
+    const hid_report_item_t *fw;
+} mouse_items_t;
+
 static gamepad_items_t gamepad_items;
 static bool gamepad_inited;
 
+static mouse_items_t mouse_items;
+static bool mouse_inited;
+
 extern void enable_mouse(void);
-extern void update_mouse(uint8_t buttons, uint8_t x, uint8_t y, uint8_t wheel);
+extern void update_mouse(uint8_t buttons, int8_t x, int8_t y, int8_t wheel, int8_t acpan);
 
 static void process_kbd_report(hid_keyboard_report_t const *report);
-static void process_mouse_report(hid_mouse_report_t const * report);
+static void process_mouse_boot_report(hid_mouse_report_t const * report);
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len);
 
 extern void enable_hid_gamepad(void);
@@ -112,6 +127,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
     hid_info[instance].report_count = hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
     printf("HID has %u reports \r\n", hid_info[instance].report_count);
     gamepad_inited = false;
+    mouse_inited = false;
   }
 
   // request to receive report
@@ -140,7 +156,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
       process_kbd_report( (hid_keyboard_report_t const*) report );
   } else if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
       TU_LOG2("HID receive boot mouse report\r\n");
-      process_mouse_report( (hid_mouse_report_t const*) report );
+      process_mouse_boot_report( (hid_mouse_report_t const*) report );
   } else {
       // Generic report requires matching ReportID and contents with previous parsed report info
       process_generic_report(dev_addr, instance, report, len);
@@ -237,7 +253,7 @@ void cursor_movement(int8_t x, int8_t y, int8_t wheel)
 #endif
 }
 
-static void process_mouse_report(hid_mouse_report_t const * report)
+static void process_mouse_boot_report(hid_mouse_report_t const * report)
 {
   static hid_mouse_report_t prev_report = { 0 };
 
@@ -256,12 +272,121 @@ static void process_mouse_report(hid_mouse_report_t const * report)
 
   TU_LOG2_MEM((uint8_t *)report, sizeof(hid_mouse_report_t), 2);
 
-  update_mouse(report->buttons, report->x, report->y, report->wheel);
+  update_mouse(report->buttons, report->x, report->y, report->wheel, 0);
 }
 
 //--------------------------------------------------------------------+
 // Generic Report
 //--------------------------------------------------------------------+
+
+static int32_t to_signed_value(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
+{
+    int32_t value = 0;
+
+    if (hid_parse_get_item_value(item, report, len, &value)) {
+	int32_t midval = ((item->attributes.logical.max - item->attributes.logical.min) >> 1) + 1;
+	value -= midval;
+	value <<= (16 - item->bit_size);
+    }
+
+    if (value >  32767) value =  32767;
+    if (value < -32767) value = -32767;
+
+    return value;
+}
+
+static bool to_bit_value(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
+{
+    int32_t value = 0;
+
+    hid_parse_get_item_value(item, report, len, &value);
+
+    return value ? true : false;
+}
+
+static int8_t to_signed_value8(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
+{
+    int32_t value = 0;
+
+    if (hid_parse_get_item_value(item, report, len, &value)) {
+        value = (value > 127) ? 127 : (value < -127) ? -127 : value;
+    }
+
+    return value;
+}
+
+static void mouse_setup(hid_report_info_t *info)
+{
+    mouse_items_t *items = &mouse_items;
+    memset(items, 0, sizeof(mouse_items_t));
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_X, &items->x)) {
+        printf("No X\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_Y, &items->y)) {
+        printf("No Y\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_WHEEL, &items->wheel)) {
+        printf("No wheel\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_CONSUMER_AC_PAN, &items->acpan)) {
+        printf("No AC PAN\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 0, &items->lb)) {
+        printf("No LB\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 1, &items->rb)) {
+        printf("No RB\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 2, &items->mb)) {
+        printf("No MB\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 3, &items->bw)) {
+        printf("No BW\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 4, &items->fw)) {
+        printf("No FW\n");
+    }
+}
+
+static void process_mouse_report(hid_report_info_t *rpt_info, uint8_t const* report, uint16_t len)
+{
+    mouse_items_t *items = &mouse_items;
+    int32_t value;
+    uint8_t butts = 0;
+    int8_t x, y, wheel, acpan;
+
+    if (!mouse_inited) {
+        mouse_setup(rpt_info);
+        mouse_inited = true;
+
+        enable_mouse();
+    }
+
+//    debug_dump_16(report);
+
+    if (to_bit_value(items->lb, report, len)) butts |= 0x01;
+    if (to_bit_value(items->rb, report, len)) butts |= 0x02;
+    if (to_bit_value(items->mb, report, len)) butts |= 0x04;
+    if (to_bit_value(items->bw, report, len)) butts |= 0x08;
+    if (to_bit_value(items->fw, report, len)) butts |= 0x10;
+
+    x = to_signed_value8(items->x, report, len);
+    y = to_signed_value8(items->y, report, len);
+    wheel = to_signed_value8(items->wheel, report, len);
+    acpan = to_signed_value8(items->acpan, report, len);
+
+    update_mouse(butts, x, y, wheel, acpan);
+}
+
 static void gamepad_setup(hid_report_info_t *info)
 {
     gamepad_items_t *items = &gamepad_items;
@@ -336,31 +461,6 @@ static void gamepad_setup(hid_report_info_t *info)
     }
 }
 
-static int32_t to_signed_value(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
-{
-    int32_t value = 0;
-
-    if (hid_parse_get_item_value(item, report, len, &value)) {
-	int32_t midval = ((item->attributes.logical.max - item->attributes.logical.min) >> 1) + 1;
-	value -= midval;
-	value <<= 8;
-    }
-
-    if (value > 32767) value = 32767;
-    if (value < -32767) value = -32767;
-
-    return value;
-}
-
-static bool to_bit_value(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
-{
-    int32_t value = 0;
-
-    hid_parse_get_item_value(item, report, len, &value);
-
-    return value ? true : false;
-}
-
 static void process_gamepad_report(hid_report_info_t *rpt_info, uint8_t const* report, uint16_t len)
 {
     static xpad_controller_t old_info;
@@ -407,9 +507,9 @@ static void process_gamepad_report(hid_report_info_t *rpt_info, uint8_t const* r
         }
     }
 
-    info.lx = to_signed_value(items->lx, report, len);
+    info.lx =  to_signed_value(items->lx, report, len);
     info.ly = -to_signed_value(items->ly, report, len);
-    info.rx = to_signed_value(items->rx, report, len);
+    info.rx =  to_signed_value(items->rx, report, len);
     info.ry = -to_signed_value(items->ry, report, len);
 
     if (memcmp(&info, &old_info, sizeof(xpad_controller_t))) {
@@ -478,7 +578,7 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
       case HID_USAGE_DESKTOP_MOUSE:
         TU_LOG1("HID receive mouse report\r\n");
         // Assume mouse follow boot report layout
-        process_mouse_report( (hid_mouse_report_t const*) report );
+        process_mouse_report(rpt_info, report, len);
       break;
 
       case HID_USAGE_DESKTOP_JOYSTICK:

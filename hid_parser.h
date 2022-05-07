@@ -14,8 +14,8 @@ typedef struct {
 } hid_unit_t;
 
 typedef struct {
-    uint32_t min; /**< Minimum value for the attribute. */
-    uint32_t max; /**< Maximum value for the attribute. */
+    int32_t min; /**< Minimum value for the attribute. */
+    int32_t max; /**< Maximum value for the attribute. */
 } hid_minmax_t;
 
 typedef struct {
