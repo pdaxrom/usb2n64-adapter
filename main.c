@@ -55,7 +55,9 @@
 #define N64SEND_DATA(d0, d1, b) ((((b) - 1) << 16) | ((d0) << 8) | (d1))
 
 enum {
-    USB_XPAD = 0,
+    USB_UNKNOWN = 0,
+    USB_XPAD,
+    USB_HID_GAMEPAD,
     USB_MOUSE,
     USB_KEYBOARD
 };
@@ -64,7 +66,7 @@ const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGE
 
 static uint8_t _dev_addr;
 
-static uint8_t input_device = USB_XPAD;
+static uint8_t input_device = USB_UNKNOWN;
 
 static uint16_t m_vid = 0;
 static uint16_t m_pid = 0;
@@ -108,7 +110,7 @@ void tuh_xpad_mount_cb(uint8_t dev_addr)
 
     tuh_vid_pid_get(dev_addr, &m_vid, &m_pid);
 
-    printf("A device %04X:%04X with address %d is mounted\r\n", m_vid, m_pid, dev_addr);
+    printf("A xpad device %04X:%04X with address %d is mounted\r\n", m_vid, m_pid, dev_addr);
 
     input_device = USB_XPAD;
 }
@@ -167,13 +169,17 @@ void tuh_xpad_read_cb(uint8_t dev_addr, uint8_t *report, xpad_controller_t *info
 static void xpad_task(void)
 {
     if (enable_vibro == 1) {
-        tuh_xpad_vibro(_dev_addr, 1);
+        if (input_device == USB_XPAD) {
+            tuh_xpad_vibro(_dev_addr, 1);
+        }
 //	printf("Start vibro\n");
 	enable_vibro = 0;
     }
 
     if (disable_vibro == 1) {
-        tuh_xpad_vibro(_dev_addr, 0);
+        if (input_device == USB_XPAD) {
+            tuh_xpad_vibro(_dev_addr, 0);
+        }
 //	printf("Stop vibro\n");
 	disable_vibro = 0;
     }
@@ -222,7 +228,14 @@ void usb_host_process(void)
 
 void enable_mouse(void)
 {
+    printf("Mouse enabled\n");
     input_device = USB_MOUSE;
+}
+
+void enable_hid_gamepad(void)
+{
+    printf("HID gamepad enabled\n");
+    input_device = USB_HID_GAMEPAD;
 }
 
 void update_mouse(uint8_t butts, uint8_t x, uint8_t y, uint8_t wheel)

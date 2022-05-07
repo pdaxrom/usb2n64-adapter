@@ -117,9 +117,8 @@ uint8_t hid_parse_report_descriptor(hid_report_info_t* report_info_arr, uint8_t 
             // only take in account the "usage page" before REPORT ID
             if ( ri_collection_depth == 0 ) {
                 info->usage_page = data;
-            } else {
-                ri_global_usage_page = data;
             }
+            ri_global_usage_page = data;
           break;
 
           case RI_GLOBAL_LOGICAL_MIN   :
@@ -218,4 +217,79 @@ uint8_t hid_parse_report_descriptor(hid_report_info_t* report_info_arr, uint8_t 
   //////
 
   return report_num;
+}
+
+bool hid_parse_find_item_by_page(hid_report_info_t* report_info_arr, uint8_t type, uint16_t page, const hid_report_item_t **item)
+{
+    for (int i = 0; i < report_info_arr->num_items; i++) {
+        if (report_info_arr->item[i].item_type == type &&
+            report_info_arr->item[i].attributes.usage.page == page) {
+            if (item) {
+                *item = &report_info_arr->item[i];
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool hid_parse_find_item_by_usage(hid_report_info_t* report_info_arr, uint8_t type, uint16_t usage, const hid_report_item_t **item)
+{
+    for (int i = 0; i < report_info_arr->num_items; i++) {
+        if (report_info_arr->item[i].item_type == type &&
+            report_info_arr->item[i].attributes.usage.usage == usage) {
+            if (item) {
+                *item = &report_info_arr->item[i];
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, uint8_t type, uint16_t page, uint8_t bit, const hid_report_item_t **item)
+{
+    for (int i = 0; i < report_info_arr->num_items; i++) {
+        if (report_info_arr->item[i].item_type == type &&
+            report_info_arr->item[i].attributes.usage.page == page) {
+            if (item) {
+                if (i + bit < report_info_arr->num_items) {
+                    *item = &report_info_arr->item[i + bit];
+                } else {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool hid_parse_get_item_value(const hid_report_item_t *item, const uint8_t *report, uint8_t len, int32_t *value)
+{
+    if (item == NULL || report == NULL) {
+        return false;
+    }
+
+    uint8_t boffs = item->bit_offset & 0x07;
+    uint8_t pos = 8 - boffs;
+    uint8_t offs  = item->bit_offset >> 3;
+    uint32_t mask = ~(0xFFFFFFFF << item->bit_size);
+
+    uint32_t val = report[offs++] >> boffs;
+
+//printf("boffs=%d pos=%d offs=%d mask=%08X val=%02X\n", boffs, pos, offs, mask, val);
+
+    while (item->bit_size > pos) {
+        val |= (report[offs++] << pos);
+        pos += 8;
+//printf("val=%08X pos=%d\n", val, pos);
+    }
+
+    *value = val & mask;
+
+    return true;
 }

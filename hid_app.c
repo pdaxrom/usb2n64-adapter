@@ -47,12 +47,37 @@ static struct
   hid_report_info_t report_info[MAX_REPORT];
 } hid_info[CFG_TUH_HID];
 
+typedef struct {
+    const hid_report_item_t *lx;
+    const hid_report_item_t *ly;
+    const hid_report_item_t *rx;
+    const hid_report_item_t *ry;
+    const hid_report_item_t *hat;
+    const hid_report_item_t *a;
+    const hid_report_item_t *b;
+    const hid_report_item_t *x;
+    const hid_report_item_t *y;
+    const hid_report_item_t *lb;
+    const hid_report_item_t *rb;
+    const hid_report_item_t *lt;
+    const hid_report_item_t *rt;
+    const hid_report_item_t *start;
+    const hid_report_item_t *select;
+    const hid_report_item_t *sl;
+    const hid_report_item_t *sr;
+} gamepad_items_t;
+
+static gamepad_items_t gamepad_items;
+static bool gamepad_inited;
+
 extern void enable_mouse(void);
 extern void update_mouse(uint8_t buttons, uint8_t x, uint8_t y, uint8_t wheel);
 
 static void process_kbd_report(hid_keyboard_report_t const *report);
 static void process_mouse_report(hid_mouse_report_t const * report);
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len);
+
+extern void enable_hid_gamepad(void);
 
 void hid_app_task(void)
 {
@@ -75,22 +100,18 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
   // Interface protocol (hid_interface_protocol_enum_t)
   const char* protocol_str[] = { "None", "Keyboard", "Mouse" };
   uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+  uint8_t const protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
 
   printf("HID Interface Protocol = %s\r\n", protocol_str[itf_protocol]);
+  printf("HID Interface Mode     = %s\r\n", protocol_mode ? "Report" : "Boot");
 
-  switch(itf_protocol) {
-  case HID_ITF_PROTOCOL_KEYBOARD:
-    break;
-  case HID_ITF_PROTOCOL_MOUSE:
+  if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
+  } else if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
     enable_mouse();
-    break;
-  case HID_ITF_PROTOCOL_NONE:
-    // By default host stack will use activate boot protocol on supported interface.
-    // Therefore for this simple example, we only need to parse generic report descriptor (with built-in parser)
+  } else {
     hid_info[instance].report_count = hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
     printf("HID has %u reports \r\n", hid_info[instance].report_count);
-
-    break;
+    gamepad_inited = false;
   }
 
   // request to receive report
@@ -112,22 +133,17 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 {
   uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
 
-  switch (itf_protocol)
-  {
-    case HID_ITF_PROTOCOL_KEYBOARD:
+  uint8_t const protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
+
+  if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
       TU_LOG2("HID receive boot keyboard report\r\n");
       process_kbd_report( (hid_keyboard_report_t const*) report );
-    break;
-
-    case HID_ITF_PROTOCOL_MOUSE:
+  } else if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
       TU_LOG2("HID receive boot mouse report\r\n");
       process_mouse_report( (hid_mouse_report_t const*) report );
-    break;
-
-    default:
+  } else {
       // Generic report requires matching ReportID and contents with previous parsed report info
       process_generic_report(dev_addr, instance, report, len);
-    break;
   }
 
   // continue to request to receive report
@@ -246,6 +262,162 @@ static void process_mouse_report(hid_mouse_report_t const * report)
 //--------------------------------------------------------------------+
 // Generic Report
 //--------------------------------------------------------------------+
+static void gamepad_setup(hid_report_info_t *info)
+{
+    gamepad_items_t *items = &gamepad_items;
+    memset(items, 0, sizeof(gamepad_items_t));
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_X, &items->lx)) {
+        printf("No LX\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_Y, &items->ly)) {
+        printf("No LY\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_RZ, &items->rx)) {
+        printf("No RX\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_Z, &items->ry)) {
+        printf("No RY\n");
+    }
+
+    if (!hid_parse_find_item_by_usage(info, RI_MAIN_INPUT, HID_USAGE_DESKTOP_HAT_SWITCH, &items->hat)) {
+        printf("No HAT\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 0, &items->a)) {
+        printf("No A\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 1, &items->b)) {
+        printf("No B\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 2, &items->x)) {
+        printf("No X\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 3, &items->y)) {
+        printf("No Y\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 4, &items->lb)) {
+        printf("No LB\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 5, &items->rb)) {
+        printf("No RB\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 6, &items->lt)) {
+        printf("No LT\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 7, &items->rt)) {
+        printf("No RT\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 9, &items->start)) {
+        printf("No START\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 8, &items->select)) {
+        printf("No SELECT\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 10, &items->sl)) {
+        printf("No SL\n");
+    }
+
+    if (!hid_parse_find_bit_item_by_page(info, RI_MAIN_INPUT, HID_USAGE_PAGE_BUTTON, 11, &items->sr)) {
+        printf("No SR\n");
+    }
+}
+
+static int32_t to_signed_value(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
+{
+    int32_t value = 0;
+
+    if (hid_parse_get_item_value(item, report, len, &value)) {
+	int32_t midval = ((item->attributes.logical.max - item->attributes.logical.min) >> 1) + 1;
+	value -= midval;
+	value <<= 8;
+    }
+
+    if (value > 32767) value = 32767;
+    if (value < -32767) value = -32767;
+
+    return value;
+}
+
+static bool to_bit_value(const hid_report_item_t *item, const uint8_t *report, uint16_t len)
+{
+    int32_t value = 0;
+
+    hid_parse_get_item_value(item, report, len, &value);
+
+    return value ? true : false;
+}
+
+static void process_gamepad_report(hid_report_info_t *rpt_info, uint8_t const* report, uint16_t len)
+{
+    static xpad_controller_t old_info;
+    xpad_controller_t info;
+    gamepad_items_t *items = &gamepad_items;
+    int32_t value;
+
+    if (!gamepad_inited) {
+        gamepad_setup(rpt_info);
+        gamepad_inited = true;
+
+        enable_hid_gamepad();
+    }
+
+//    debug_dump_16(report);
+
+    memset(&info, 0, sizeof(xpad_controller_t));
+
+    if (to_bit_value(items->a, report, len))  info.buttons |= XPAD_PAD_A;
+    if (to_bit_value(items->b, report, len))  info.buttons |= XPAD_PAD_B;
+    if (to_bit_value(items->x, report, len))  info.buttons |= XPAD_PAD_X;
+    if (to_bit_value(items->y, report, len))  info.buttons |= XPAD_PAD_Y;
+    if (to_bit_value(items->lb, report, len)) info.buttons |= XPAD_PAD_LB;
+    if (to_bit_value(items->rb, report, len)) info.buttons |= XPAD_PAD_RB;
+    if (to_bit_value(items->start, report, len)) info.buttons |= XPAD_START;
+    if (to_bit_value(items->select, report, len)) info.buttons |= XPAD_XLOGO;
+    if (to_bit_value(items->sl, report, len)) info.buttons |= XPAD_STICK_L;
+    if (to_bit_value(items->sr, report, len)) info.buttons |= XPAD_STICK_R;
+
+    if (to_bit_value(items->lt, report, len)) info.lt = 1027; else info.lt = 0;
+    if (to_bit_value(items->rt, report, len)) info.rt = 1027; else info.rt = 0;
+
+    if (hid_parse_get_item_value(items->hat, report, len, &value)) {
+//        printf("HAT = %d\n", value);
+        switch(value) {
+        case 0: info.buttons |= XPAD_HAT_UP; break;
+        case 1: info.buttons |= XPAD_HAT_UP | XPAD_HAT_RIGHT; break;
+        case 2: info.buttons |= XPAD_HAT_RIGHT; break;
+        case 3: info.buttons |= XPAD_HAT_RIGHT | XPAD_HAT_DOWN; break;
+        case 4: info.buttons |= XPAD_HAT_DOWN; break;
+        case 5: info.buttons |= XPAD_HAT_DOWN | XPAD_HAT_LEFT; break;
+        case 6: info.buttons |= XPAD_HAT_LEFT; break;
+        case 7: info.buttons |= XPAD_HAT_LEFT | XPAD_HAT_UP; break;
+        }
+    }
+
+    info.lx = to_signed_value(items->lx, report, len);
+    info.ly = -to_signed_value(items->ly, report, len);
+    info.rx = to_signed_value(items->rx, report, len);
+    info.ry = -to_signed_value(items->ry, report, len);
+
+    if (memcmp(&info, &old_info, sizeof(xpad_controller_t))) {
+        tuh_xpad_read_cb(-1, (uint8_t *) report, &info);
+        memcpy(&old_info, &info, sizeof(xpad_controller_t));
+    }
+}
+
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
 {
   (void) dev_addr;
@@ -291,7 +463,7 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
   // - System Control (Power key)   : Desktop, System Control
   // - Generic (vendor)             : 0xFFxx, xx
 
-printf(">>>>>>>> %X %X\n", rpt_info->usage_page, rpt_info->usage);
+//printf(">>>>>>>> %X %X\n", rpt_info->usage_page, rpt_info->usage);
 
   if ( rpt_info->usage_page == HID_USAGE_PAGE_DESKTOP )
   {
@@ -312,15 +484,13 @@ printf(">>>>>>>> %X %X\n", rpt_info->usage_page, rpt_info->usage);
       case HID_USAGE_DESKTOP_JOYSTICK:
         TU_LOG1("HID receive joystick report\r\n");
         TU_LOG2_MEM((uint8_t *)report, 8, 2);
-        // Assume mouse follow boot report layout
-        //process_mouse_report( (hid_mouse_report_t const*) report );
+        process_gamepad_report(rpt_info, report, len);
       break;
 
       case HID_USAGE_DESKTOP_GAMEPAD:
         TU_LOG1("HID receive gamepad report\r\n");
         TU_LOG2_MEM((uint8_t *)report, 8, 2);
-        // Assume mouse follow boot report layout
-        //process_mouse_report( (hid_mouse_report_t const*) report );
+        process_gamepad_report(rpt_info, report, len);
       break;
 
       default: break;

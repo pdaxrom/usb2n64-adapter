@@ -49,4 +49,9 @@ typedef struct {
 
 uint8_t hid_parse_report_descriptor(hid_report_info_t* report_info_arr, uint8_t arr_count, uint8_t const* desc_report, uint16_t desc_len);
 
+bool hid_parse_find_item_by_page(hid_report_info_t* report_info_arr, uint8_t type, uint16_t page, const hid_report_item_t **item);
+bool hid_parse_find_item_by_usage(hid_report_info_t* report_info_arr, uint8_t type, uint16_t usage, const hid_report_item_t **item);
+bool hid_parse_find_bit_item_by_page(hid_report_info_t* report_info_arr, uint8_t type, uint16_t page, uint8_t bit, const hid_report_item_t **item);
+bool hid_parse_get_item_value(const hid_report_item_t *item, const uint8_t *report, uint8_t len, int32_t *value);
+
 #endif
