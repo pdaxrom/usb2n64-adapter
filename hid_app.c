@@ -27,18 +27,15 @@
 #include "tusb.h"
 
 #include "hid_parser.h"
+#include "hid_app.h"
 
 //--------------------------------------------------------------------+
 // MACRO TYPEDEF CONSTANT ENUM DECLARATION
 //--------------------------------------------------------------------+
 
-// If your host terminal support ansi escape code such as TeraTerm
-// it can be use to simulate mouse cursor movement within terminal
-#define USE_ANSI_ESCAPE   0
-
 #define MAX_REPORT  4
 
-static uint8_t const keycode2ascii[128][2] =  { HID_KEYCODE_TO_ASCII };
+static uint16_t const keycode2randnet[256] =  { HID_KEYCODE_TO_RANDNET };
 
 // Each HID instance can has multiple reports
 static struct
@@ -85,12 +82,15 @@ static bool gamepad_inited;
 static mouse_items_t mouse_items;
 static bool mouse_inited;
 
-extern void enable_mouse(void);
-extern void update_mouse(uint8_t buttons, int8_t x, int8_t y, int8_t wheel, int8_t acpan);
-
 static void process_kbd_report(hid_keyboard_report_t const *report);
 static void process_mouse_boot_report(hid_mouse_report_t const * report);
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len);
+
+extern void enable_keyboard(void);
+extern void update_keys(uint16_t keys[3], bool error, bool home);
+
+extern void enable_mouse(void);
+extern void update_mouse(uint8_t buttons, int8_t x, int8_t y, int8_t wheel, int8_t acpan);
 
 extern void enable_hid_gamepad(void);
 
@@ -173,44 +173,32 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 // Keyboard
 //--------------------------------------------------------------------+
 
-// look up new key in previous keys
-static inline bool find_key_in_report(hid_keyboard_report_t const *report, uint8_t keycode)
-{
-  for(uint8_t i=0; i<6; i++)
-  {
-    if (report->keycode[i] == keycode)  return true;
-  }
-
-  return false;
-}
-
 static void process_kbd_report(hid_keyboard_report_t const *report)
 {
-  static hid_keyboard_report_t prev_report = { 0, 0, {0} }; // previous report to check key released
+    uint16_t keys[3] = { 0 };
+    uint8_t pressed = 0;
+    bool home = false;
 
-  //------------- example code ignore control (non-printable) key affects -------------//
-  for(uint8_t i=0; i<6; i++)
-  {
-    if ( report->keycode[i] )
-    {
-      if ( find_key_in_report(&prev_report, report->keycode[i]) )
-      {
-        // exist in previous report means the current key is holding
-      }else
-      {
-        // not existed in previous report means the current key is pressed
-        bool const is_shift = report->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT);
-        uint8_t ch = keycode2ascii[report->keycode[i]][is_shift ? 1 : 0];
-        putchar(ch);
-        if ( ch == '\r' ) putchar('\n'); // added new line for enter key
+    if (report->modifier & KEYBOARD_MODIFIER_LEFTSHIFT)  keys[pressed++] = 0x0E01;
+    if (report->modifier & KEYBOARD_MODIFIER_LEFTCTRL)   keys[pressed++] = 0x1107;
+    if (report->modifier & KEYBOARD_MODIFIER_LEFTALT)    keys[pressed++] = 0x1008;
+    if (report->modifier & KEYBOARD_MODIFIER_LEFTGUI && pressed < 3)    keys[pressed++] = 0x0F07;
+    if (report->modifier & KEYBOARD_MODIFIER_RIGHTSHIFT && pressed < 3) keys[pressed++] = 0x0E06;
 
-        fflush(stdout); // flush right away, else nanolib will wait for newline
-      }
+    for (uint8_t i = 0; i < 6; i++) {
+	if (report->keycode[i]) {
+	    if (keycode2randnet[report->keycode[i]] == 0xFFFF) {
+		home = true;
+	    } else {
+		if (pressed < 3) {
+		    keys[pressed] = keycode2randnet[report->keycode[i]];
+		}
+		pressed++;
+	    }
+	}
     }
-    // TODO example skips key released
-  }
 
-  prev_report = *report;
+    update_keys(keys, (pressed > 3) ? true : false, home);
 }
 
 //--------------------------------------------------------------------+

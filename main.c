@@ -45,8 +45,6 @@
 
 #define USE_GPIO_IRQ
 
-#define USE_PIO_DMA
-
 #define N64_DIO_PIN	14
 
 #define FLASH_TARGET_SIZE	(32 * 1024)
@@ -77,6 +75,11 @@ static volatile uint8_t disable_vibro = 0;
 static volatile uint8_t buttons[2] = { 0, 0 };
 static volatile uint8_t sticks[2] = { 0, 0 };
 
+static volatile uint16_t randnet_keys[3];
+static volatile uint8_t  randnet_pressed;
+static volatile bool     randnet_error;
+static volatile bool     randnet_home;
+
 static volatile uint8_t use_rumble_pack = 0;
 static volatile uint8_t memory_pak_changed = 0;
 
@@ -89,12 +92,10 @@ static volatile PIO pio;
 static volatile uint sm;
 static volatile uint pio_offset;
 
-#ifdef USE_PIO_DMA
 static volatile uint32_t pio_dma_chan;
 
 // 16 words (data) + 1 word (crc) + 1 word (stop)
 static volatile uint32_t dma_buffer[18] __attribute__((aligned (16)));
-#endif
 
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTYPES
@@ -226,6 +227,19 @@ void usb_host_process(void)
     }
 }
 
+void enable_keyboard(void)
+{
+    randnet_keys[0] = 0;
+    randnet_keys[1] = 0;
+    randnet_keys[2] = 0;
+    randnet_pressed = 0;
+    randnet_error = false;
+    randnet_home = false;
+
+    printf("Keyboard enabled\n");
+    input_device = USB_KEYBOARD;
+}
+
 void enable_mouse(void)
 {
     printf("Mouse enabled\n");
@@ -236,6 +250,18 @@ void enable_hid_gamepad(void)
 {
     printf("HID gamepad enabled\n");
     input_device = USB_HID_GAMEPAD;
+}
+
+void update_keys(uint16_t keys[3], bool error, bool home)
+{
+    randnet_keys[0] = keys[0];
+    randnet_keys[1] = keys[1];
+    randnet_keys[2] = keys[2];
+
+    randnet_error = error;
+    randnet_home = home;
+
+//    printf("%02X %02X %02X %s %s\n", randnet_keys[0], randnet_keys[1], randnet_keys[2], error ? "[ERROR]" : "", home ? "[HOME]" : "");
 }
 
 void update_mouse(uint8_t butts, int8_t x, int8_t y, int8_t wheel, int8_t acpan)
@@ -372,7 +398,6 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 		uint8_t crc = calc_data_crc(data_block);
 //		wait_ticks(TICKS_1US * 3);
 
-#ifdef USE_PIO_DMA
 		dma_buffer[0] = N64SEND_DATA(crc, 0x00, 8);
 		dma_buffer[1] = 0;
 
@@ -383,17 +408,7 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 		dma_channel_wait_for_finish_blocking(pio_dma_chan);
 
 		while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
-#else
-		uint32_t data = N64SEND_DATA(crc, 0x00, 8);
 
-		while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		pio->txf[sm] = data;
-
-		while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		pio->txf[sm] = 0;
-
-		pio_sm_get_blocking(pio, sm);
-#endif
 		return bytes_read;
 	    }
 	}
@@ -417,7 +432,7 @@ static int __not_in_flash_func(read_data_block)(uint8_t *data_block)
 static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
 {
     uint8_t crc = calc_data_crc(data_block);
-#ifdef USE_PIO_DMA
+
     for (int i = 0; i < 32; i+= 2) {
 	dma_buffer[i >> 1] = N64SEND_DATA(data_block[i + 0], data_block[i + 1], 16);
     }
@@ -430,25 +445,6 @@ static int __not_in_flash_func(write_data_block)(uint8_t *data_block)
     dma_channel_wait_for_finish_blocking(pio_dma_chan);
 
     while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
-#else
-    uint32_t data;
-
-    for (int i = 0; i < 32; i += 2) {
-	data = N64SEND_DATA(data_block[i + 0], data_block[i + 1], 16);
-	while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-	pio->txf[sm] = data;
-    }
-    
-    data = N64SEND_DATA(crc, 0x00, 8);
-
-    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-    pio->txf[sm] = data;
-
-    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-    pio->txf[sm] = 0;
-
-    pio_sm_get_blocking(pio, sm);
-#endif
 }
 
 static uint32_t __not_in_flash_func(read_command)()
@@ -466,13 +462,12 @@ static uint32_t __not_in_flash_func(read_command)()
 
 	if (bits_read == 9) {
 	    // if not command 0x02 and 0x03
-	    if ((command >> 1) != 0x02 && (command >> 1) != 0x03) {
+	    if ((command >> 1) != 0x02 && (command >> 1) != 0x03 && (command >> 1) != 0x13) {
 		command >>= 1;
 
 		wait_ticks(TICKS_1US * 4);
 
 		if (command == 0x00 || command == 0xFF) {
-#ifdef USE_PIO_DMA
 		    if (input_device == USB_MOUSE) {
 			dma_buffer[0] = N64SEND_DATA(0x02, 0x00, 16);
 			dma_buffer[1] = N64SEND_DATA(0x01, 0x00, 8);
@@ -491,72 +486,24 @@ static uint32_t __not_in_flash_func(read_command)()
 		    dma_channel_wait_for_finish_blocking(pio_dma_chan);
 
 		    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
-#else
-		    uint32_t data[2];
-
-		    if (input_device == USB_MOUSE) {
-			data[0] = N64SEND_DATA(0x02, 0x00, 16);
-			data[1] = N64SEND_DATA(0x01, 0x00, 8);
-		    } else if (input_device == USB_KEYBOARD) {
-			data[0] = N64SEND_DATA(0x00, 0x02, 16);
-			data[1] = N64SEND_DATA(0x01, 0x00, 8);
-		    } else {
-			data[0] = N64SEND_DATA(0x05, 0x00, 16);
-			data[1] = N64SEND_DATA(0x01, 0x00, 8);
-		    }
-
-		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		    pio->txf[sm] = data[0];
-		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		    pio->txf[sm] = data[1];
-		    while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-		    pio->txf[sm] = 0;
-
-		    pio_sm_get_blocking(pio, sm);
-#endif
 		} else if (command == 0x01) {
-#ifdef USE_PIO_DMA
-		    int size;
 		    if (input_device != USB_KEYBOARD) {
 			dma_buffer[0] = N64SEND_DATA(buttons[0], buttons[1], 16);
 			dma_buffer[1] = N64SEND_DATA(sticks[0], sticks[1], 16);
 			dma_buffer[2] = 0;
-			size = 3;
-		    } else {
-			size = 7;
+
+			pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
+
+			dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 3);
+			dma_channel_wait_for_finish_blocking(pio_dma_chan);
+
+			while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
+
+			if (input_device == USB_MOUSE) {
+			    sticks[0] = 0;
+			    sticks[1] = 0;
+			}
 		    }
-
-		    pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
-
-		    dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, size);
-		    dma_channel_wait_for_finish_blocking(pio_dma_chan);
-
-		    while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
-
-		    if (input_device == USB_MOUSE) {
-			sticks[0] = 0;
-			sticks[1] = 0;
-		    }
-#else
-		    if (input_device != USB_KEYBOARD) {
-			uint32_t data[2] = { N64SEND_DATA(buttons[0], buttons[1], 16),  N64SEND_DATA(sticks[0], sticks[1], 16) };
-
-			while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-			pio->txf[sm] = data[0];
-			while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-			pio->txf[sm] = data[1];
-			while((pio->fstat & (1u << (PIO_FSTAT_TXFULL_LSB + sm))) != 0) {}
-			pio->txf[sm] = 0;
-		    } else {
-		    }
-
-		    pio_sm_get_blocking(pio, sm);
-
-		    if (input_device == USB_MOUSE) {
-			sticks[0] = 0;
-			sticks[1] = 0;
-		    }
-#endif
 		} else {
 		    printf("Unk cmd %X\n", command);
 		}
@@ -615,6 +562,25 @@ static uint32_t __not_in_flash_func(read_command)()
 		write_data_block(data_block);
 	    }
 	    return command;
+	} else if (bits_read == 16) {
+	    if ((command >> 16) == 0x13) {
+		wait_ticks(TICKS_1US * 3); // skip console stop bit
+
+		uint8_t *ptr = (uint8_t *)randnet_keys;
+
+		dma_buffer[0] = N64SEND_DATA(ptr[1], ptr[0], 16);
+		dma_buffer[1] = N64SEND_DATA(ptr[3], ptr[2], 16);
+		dma_buffer[2] = N64SEND_DATA(ptr[5], ptr[4], 16);
+		dma_buffer[3] = N64SEND_DATA(((randnet_error ? 0x10 : 0x00) | (randnet_home ? 0x01 : 0x00)), 0, 8);
+		dma_buffer[4] = 0;
+
+		pio_sm_exec(pio, sm, pio_encode_jmp(pio_offset + n64send_dma_offset_loop));
+
+		dma_channel_transfer_from_buffer_now(pio_dma_chan, dma_buffer, 5);
+		dma_channel_wait_for_finish_blocking(pio_dma_chan);
+
+		while (pio_sm_get_pc(pio, sm) != (pio_offset + n64send_dma_offset_stop)) {}
+	    }
 	}
     }
 }
@@ -703,7 +669,6 @@ int main(void)
     gpio_set_dir(N64_DIO_PIN, GPIO_IN);
 
     {
-#ifdef USE_PIO_DMA
 	printf("PIO DMA enabled\n");
 
 	pio = pio0;
@@ -730,16 +695,6 @@ int main(void)
 	);
 
 	pio_sm_config c = n64send_dma_program_get_default_config(pio_offset);
-#else
-
-	pio = pio0;
-
-	pio_offset = pio_add_program(pio, &n64send_program);
-
-	sm = pio_claim_unused_sm(pio, true);
-
-	pio_sm_config c = n64send_program_get_default_config(pio_offset);
-#endif
 
 	sm_config_set_in_shift(&c, false, false, 32);
 	sm_config_set_out_shift(&c, false, false, 32);
@@ -754,9 +709,7 @@ int main(void)
 
 	sm_config_set_clkdiv(&c, 16.625f);
 
-#ifdef USE_PIO_DMA
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-#endif
 
 	pio_sm_init(pio, sm, pio_offset, &c);
 

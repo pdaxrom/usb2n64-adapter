@@ -1,39 +1,3 @@
-.program n64send
-    SET PINS, 0
-    SET PINDIRS, 0
-
-loop:
-    PULL BLOCK
-    OUT Y, 16
-    JMP !Y, send_stop
-
-pull_and_send:
-    ; move 1 bit to send to X
-    OUT X, 1
-    JMP !X send_0
-    JMP send_1
-
-send_0:
-    SET PINDIRS, 1 [30]
-    NOP [4]
-    SET PINDIRS, 0 [7]
-    JMP Y-- pull_and_send
-    JMP loop
-
-send_1:
-    SET PINDIRS, 1 [11]
-    SET PINDIRS, 0 [31]
-    JMP Y-- pull_and_send
-    JMP loop
-
-send_stop:
-    SET PINDIRS, 1 [22]
-    SET PINDIRS, 0
-    PUSH
-    JMP loop
-
-.wrap
-
 .program n64send_dma
     SET PINS, 0
     SET PINDIRS, 0
