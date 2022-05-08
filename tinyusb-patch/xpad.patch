@@ -11,7 +11,7 @@ index 1aa180ef..894620fc 100644
  
  	# Sometimes have to do host specific actions in mostly
 diff --git a/src/class/hid/hid_host.c b/src/class/hid/hid_host.c
-index ac260d39..f76a9670 100644
+index ac260d39..07fc1fe0 100644
 --- a/src/class/hid/hid_host.c
 +++ b/src/class/hid/hid_host.c
 @@ -257,6 +257,7 @@ void hidh_close(uint8_t dev_addr)
@@ -22,7 +22,14 @@ index ac260d39..f76a9670 100644
  static bool config_get_report_desc          (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result);
  static bool config_get_report_desc_complete (uint8_t dev_addr, tusb_control_request_t const * request, xfer_result_t result);
  
-@@ -375,7 +376,37 @@ static bool config_set_protocol(uint8_t dev_addr, tusb_control_request_t const *
+@@ -370,12 +371,43 @@ static bool config_set_protocol(uint8_t dev_addr, tusb_control_request_t const *
+       .direction = TUSB_DIR_OUT
+     },
+     .bRequest = HID_REQ_CONTROL_SET_PROTOCOL,
+-    .wValue   = HID_PROTOCOL_BOOT,
++//    .wValue   = HID_PROTOCOL_BOOT,
++    .wValue   = HID_PROTOCOL_REPORT,
+     .wIndex   = hid_itf->itf_num,
      .wLength  = 0
    };
  
@@ -61,7 +68,7 @@ index ac260d39..f76a9670 100644
    return true;
  }
  
-@@ -392,6 +423,11 @@ static bool config_get_report_desc(uint8_t dev_addr, tusb_control_request_t cons
+@@ -392,6 +424,11 @@ static bool config_get_report_desc(uint8_t dev_addr, tusb_control_request_t cons
    uint8_t const instance    = get_instance_id_by_itfnum(dev_addr, itf_num);
    hidh_interface_t* hid_itf = get_instance(dev_addr, instance);
  
