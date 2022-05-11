@@ -1,10 +1,16 @@
 # USB to N64 gamepad adapter
 
-The adapter allows you to use the USB gamepad with the Nintendo N64 console. The current firmware supports the XBOX ONE gamepad.
+This adapter allows you to use USB gamepads with Nintendo N64 console.
 
-The Pico PIO code was derived from https://github.com/stacksmashing/TensorKartRealHW project.
+Features:
+
+- Support for XBOX 360 Wired, XBOX ONE, HID gamepads
+- Memory pack support (saving to Raspberry Pi Pico flash on console power off)
+- Rumble pack support for XBOX 360 Wired and XBOX ONE gamepads
 
 ## Usage
+
+
 
 Nothing yet
 
