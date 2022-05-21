@@ -7,8 +7,8 @@ Features:
 - Support for XBOX 360 Wired, XBOX ONE, HID gamepads
 - Support for USB mouses
 - Support for USB keyboards
-- Controller (memory) pack support (saving to Raspberry Pi Pico flash on console power off)
-- Rumble pack support for XBOX 360 Wired and XBOX ONE gamepads
+- Controller (memory) pak support (saving to Raspberry Pi Pico flash on console power off)
+- Rumble pak support for XBOX 360 Wired and XBOX ONE gamepads
 
 ## Build
 
