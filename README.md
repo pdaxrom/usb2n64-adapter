@@ -20,7 +20,7 @@ You will need:
 - one of supported gamepads
 - power supply for Raspberry Pi Pico
 
-Cut the cable from the old gamepad or extension cable, strip the white (data) and black (ground) wires. Red (power) cut off - it is not needed. Solder the cable to the Raspberry Pi Pico board - black wire (ground) to the GND pad, white wire (N64 controller data) to the PG14 pad. Flash the adapter firmware to the board.
+Cut the cable from the old gamepad or extension cable, strip the white (data) and black (ground) wires. Red (power) cut off - it is not needed. Solder the cable to the Raspberry Pi Pico board - black wire (ground) to the GND pad, white wire (N64 controller data) to the GP14 pad. Flash the adapter firmware to the board.
 
 ## Usage
 
@@ -28,7 +28,7 @@ Connect the board cable to the N64 and connect the OTG Y cable to the board. Con
 
 Turn on your game console.
 
-On xbox gamepads, the xbox button turns on the rumble pak (fast blinking of the LED on the board). The controller pak is saved automatically when the console is turned off.
+On xbox gamepads, the xbox button turns on the rumble pak (fast blinking of the on-board LED). The controller pak is saved automatically when the console is turned off.
 
 ## Photos
 
