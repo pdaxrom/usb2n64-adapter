@@ -554,7 +554,7 @@ static uint32_t __not_in_flash_func(read_command)()
 
 		if (addr < 0x8000) {
 		    memmove(data_block, &memory_pak[addr], 32);
-		} else if (use_rumble_pack) {
+		} else if (use_rumble_pack && (command & 0xFFE0) == 0x8000) {
 		    memset(data_block, 0x80, 32);
 		} else {
 		    memset(data_block, 0x00, 32);
