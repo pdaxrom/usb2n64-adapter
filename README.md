@@ -24,6 +24,8 @@ Cut the cable from the old gamepad or extension cable, strip the white (data) an
 
 ## Usage
 
+Build or download firmware from release, upload to the Raspberry Pi Pico.
+
 Connect the board cable to the N64 and connect the OTG Y cable to the board. Connect the gamepad to the USB host port of the OTG Y cable. Connect the OTG Y cable to a power supply.
 
 Turn on your game console.
