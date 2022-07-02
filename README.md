@@ -15,10 +15,10 @@ Features:
 You will need:
 
 - one Raspberry Pi Pico board
-- micro usb host OTG cable with power (OTG Y cable)
-- cable from old N64 controller or an extension cable cord for N64 controller
+- a micro usb host OTG cable with power (OTG Y cable)
+- a cable from old N64 controller or an extension cable cord for N64 controller
 - one of supported gamepads
-- power supply for Raspberry Pi Pico
+- a power supply for Raspberry Pi Pico
 
 Cut the cable from the old gamepad or extension cable, strip the white (data) and black (ground) wires. Red (power) cut off - it is not needed. Solder the cable to the Raspberry Pi Pico board - black wire (ground) to the GND pad, white wire (N64 controller data) to the GP14 pad. Flash the adapter firmware to the board.
 
