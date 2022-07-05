@@ -49,3 +49,17 @@ On xbox gamepads, the xbox button turns on the rumble pak (fast blinking of the 
 <img src="pics/IMG_20220508_183610.jpg" width="480" />
 
 <img src="pics/IMG_20220508_183708.jpg" width="480" />
+
+<img src="pics/IMG_20220620_125807.jpg" width="480" />
+
+<img src="pics/IMG_20220620_125832.jpg" width="480" />
+
+<img src="pics/IMG_20220620_160702.jpg" width="480" />
+
+<img src="pics/IMG_20220620_160734.jpg" width="480" />
+
+<img src="pics/IMG_20220705_162936.jpg" width="480" />
+
+<img src="pics/IMG_20220705_163001.jpg" width="480" />
+
+<img src="pics/IMG_20220705_163022.jpg" width="480" />
