@@ -82,7 +82,9 @@ static bool gamepad_inited;
 static mouse_items_t mouse_items;
 static bool mouse_inited;
 
-static void process_kbd_report(hid_keyboard_report_t const *report);
+static bool keyboard_inited;
+
+static void process_kbd_boot_report(hid_keyboard_report_t const *report);
 static void process_mouse_boot_report(hid_mouse_report_t const * report);
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len);
 
@@ -121,6 +123,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
   printf("HID Interface Mode     = %s\r\n", protocol_mode ? "Report" : "Boot");
 
   if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
+    enable_keyboard();
   } else if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
     enable_mouse();
   } else {
@@ -128,6 +131,15 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
     printf("HID has %u reports \r\n", hid_info[instance].report_count);
     gamepad_inited = false;
     mouse_inited = false;
+    keyboard_inited = false;
+
+    if (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
+	printf("Enable keyboard\n");
+	enable_keyboard();
+    } else if (itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
+	printf("Enable mouse\n");
+	enable_mouse();
+    }
   }
 
   // request to receive report
@@ -153,7 +165,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 
   if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
       TU_LOG2("HID receive boot keyboard report\r\n");
-      process_kbd_report( (hid_keyboard_report_t const*) report );
+      process_kbd_boot_report( (hid_keyboard_report_t const*) report );
   } else if (protocol_mode == HID_PROTOCOL_BOOT && itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
       TU_LOG2("HID receive boot mouse report\r\n");
       process_mouse_boot_report( (hid_mouse_report_t const*) report );
@@ -173,7 +185,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 // Keyboard
 //--------------------------------------------------------------------+
 
-static void process_kbd_report(hid_keyboard_report_t const *report)
+static void process_kbd_boot_report(hid_keyboard_report_t const *report)
 {
     uint16_t keys[3] = { 0 };
     uint8_t pressed = 0;
@@ -304,8 +316,6 @@ static void process_mouse_report(hid_report_info_t *rpt_info, uint8_t const* rep
     if (!mouse_inited) {
         mouse_setup(rpt_info);
         mouse_inited = true;
-
-        enable_mouse();
     }
 
 //    debug_dump_16(report);
@@ -455,6 +465,17 @@ static void process_gamepad_report(hid_report_info_t *rpt_info, uint8_t const* r
     }
 }
 
+static void process_keyboard_report(hid_report_info_t *rpt_info, uint8_t const* report, uint16_t len)
+{
+    if (!keyboard_inited) {
+        keyboard_inited = true;
+    }
+
+    if (len == 8) {
+	process_kbd_boot_report( (hid_keyboard_report_t const*) report );
+    }
+}
+
 static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
 {
   (void) dev_addr;
@@ -509,7 +530,7 @@ static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t c
       case HID_USAGE_DESKTOP_KEYBOARD:
         TU_LOG1("HID receive keyboard report\r\n");
         // Assume keyboard follow boot report layout
-        process_kbd_report( (hid_keyboard_report_t const*) report );
+        process_keyboard_report(rpt_info, report, len);
       break;
 
       case HID_USAGE_DESKTOP_MOUSE:

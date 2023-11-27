@@ -64,7 +64,7 @@ const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGE
 
 static uint8_t _dev_addr;
 
-static uint8_t input_device = USB_UNKNOWN;
+static volatile uint8_t input_device = USB_UNKNOWN;
 
 static uint16_t m_vid = 0;
 static uint16_t m_pid = 0;
@@ -79,6 +79,7 @@ static volatile uint16_t randnet_keys[3];
 static volatile uint8_t  randnet_pressed;
 static volatile bool     randnet_error;
 static volatile bool     randnet_home;
+static volatile uint8_t  randnet_led_status;
 
 static volatile uint8_t use_rumble_pack = 0;
 static volatile uint8_t memory_pak_changed = 0;
@@ -563,8 +564,10 @@ static uint32_t __not_in_flash_func(read_command)()
 	    }
 	    return command;
 	} else if (bits_read == 16) {
-	    if ((command >> 16) == 0x13) {
+	    if ((command >> 8) == 0x13) {
 		wait_ticks(TICKS_1US * 3); // skip console stop bit
+
+		randnet_led_status = command & 0xff;
 
 		uint8_t *ptr = (uint8_t *)randnet_keys;
 
