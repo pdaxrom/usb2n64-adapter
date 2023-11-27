@@ -852,6 +852,8 @@ static bool enum_set_address_complete(uint8_t dev_addr, tusb_control_request_t c
   // open control pipe for new address
   TU_ASSERT( usbh_edpt_control_open(new_addr, new_dev->ep0_size) );
 
+  sleep_ms(100);
+
   // Get full device descriptor
   TU_LOG2("Get Device Descriptor\r\n");
   tusb_control_request_t const new_request =
