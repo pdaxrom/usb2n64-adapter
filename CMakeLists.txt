@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.12)
 
+# Check for custom cross environment settings
+if(EXISTS $ENV{HOME}/cross-env.cmake)
+  message(STATUS "Custom cross environment detected")
+  include($ENV{HOME}/cross-env.cmake)
+else()
+  message(STATUS "Custom cross environment is not detected")
+endif()
+
 set(PICO_SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/pico-sdk)
 
 include(pico_sdk_import.cmake)
